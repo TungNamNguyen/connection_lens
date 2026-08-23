@@ -1,0 +1,70 @@
+version: 2
+
+models:
+  - name: stg_connections
+    description: >
+      Silver layer. One row per connection per snapshot_ts, cleaned and typed.
+      Restricted profiles (blank LinkedIn URL) are kept and flagged via
+      `is_identifiable`; Gold filters them out. No cross-snapshot comparison
+      happens here.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - connection_id
+              - snapshot_ts
+          config:
+            where: "connection_id is not null"
+    columns:
+      - name: connection_id
+        description: >
+          The percent-encoded LinkedIn profile URL — the only stable identity
+          in the export (§7). NULL for restricted profiles.
+        data_tests:
+          - not_null:
+              config:
+                where: "is_identifiable"
+      - name: full_name
+        description: First + last name, NULL for restricted profiles.
+      - name: email_address
+        description: >
+          Opt-in only, mostly NULL by design. Deliberately has no not_null
+          test (§5, §12, §17).
+      - name: company
+        description: Employer as written in the export; NULL when not disclosed.
+      - name: company_label
+        description: company with NULL replaced by '(unknown)' for grouping.
+      - name: company_key
+        description: Surrogate key of company_normalised; joins to dim_company.
+        data_tests:
+          - not_null
+      - name: position
+        description: Job title as written in the export; NULL when not disclosed.
+      - name: connected_on
+        description: Date the connection was made, parsed from '%d %b %Y'.
+        data_tests:
+          - not_null
+          - dbt_expectations.expect_column_values_to_be_between:
+              arguments:
+                min_value: "cast('2003-05-05' as date)"
+                max_value: "current_date"
+              config:
+                severity: warn
+      - name: snapshot_ts
+        description: UTC timestamp of the export upload this row belongs to.
+        data_tests:
+          - not_null
+      - name: file_hash
+        description: MD5 of the source file — carried down from Bronze for lineage.
+        data_tests:
+          - not_null
+      - name: is_identifiable
+        description: Whether the row carries a usable connection_id.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [true, false]
+                quote: false
+      - name: has_email
+        description: Whether LinkedIn exported an email address for this connection.
