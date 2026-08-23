@@ -1,0 +1,58 @@
+# ---------------------------------------------------------------------------
+# Connection Lens — this repo must NEVER contain real personal data (see §1).
+# ---------------------------------------------------------------------------
+
+# Real LinkedIn exports (the owner's PII)
+Connections.csv
+Connections*.csv
+data/
+!tests/fixtures/
+*.duckdb
+*.duckdb.wal
+*.duckdb.tmp/
+
+# Object storage volume
+minio-data/
+volumes/
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Assistant config (per §18: do not commit)
+.claude/
+
+# dbt
+dbt_project/target/
+dbt_project/dbt_packages/
+dbt_project/logs/
+dbt_project/.user.yml
+logs/
+
+# Great Expectations runtime output
+great_expectations/uncommitted/
+
+# Airflow runtime
+airflow.db
+airflow-webserver.pid
+standalone_admin_password.txt
+
+# Python
+.venv/
+.venv-airflow/
+venv/
+build/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
