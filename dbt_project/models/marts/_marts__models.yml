@@ -1,0 +1,134 @@
+version: 2
+
+models:
+  - name: dim_company
+    description: >
+      Gold dimension of employers seen in the network. Connections with no
+      disclosed employer roll up into a single '(unknown)' member.
+    columns:
+      - name: company_key
+        description: Surrogate key of the normalised company name.
+        data_tests:
+          - unique
+          - not_null
+      - name: company_name
+        description: Most recently seen spelling of the employer name.
+        data_tests:
+          - not_null
+      - name: current_connection_count
+        description: Connections currently working there (dim_connection, is_current).
+        data_tests:
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: true
+
+  - name: dim_date
+    description: Conformed calendar dimension covering the whole data range.
+    columns:
+      - name: date_key
+        description: Integer key in YYYYMMDD form.
+        data_tests:
+          - unique
+          - not_null
+      - name: date_day
+        data_tests:
+          - unique
+          - not_null
+
+  - name: fct_connection_snapshot
+    description: >
+      Gold fact at connection_id + snapshot_ts grain: one row per connection
+      per ingested export. A disappeared connection simply has no row.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - connection_id
+              - snapshot_ts
+    columns:
+      - name: connection_snapshot_key
+        description: Surrogate key of the fact grain.
+        data_tests:
+          - unique
+          - not_null
+      - name: connection_id
+        description: LinkedIn profile URL of the connection.
+        # Referential integrity against dim_connection is asserted by the
+        # singular test `assert_current_fact_rows_have_dim_connection`, scoped
+        # to the current snapshot: dim_connection only ever sees the latest
+        # export, so a warehouse rebuilt over pre-existing Bronze history
+        # legitimately has fact rows for people who left before the first
+        # snapshot run.
+        data_tests:
+          - not_null
+      - name: company_key
+        description: Employer at that snapshot.
+        data_tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: ref('dim_company')
+                field: company_key
+      - name: snapshot_date_key
+        description: Snapshot date as an integer key.
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: connected_on_date_key
+        description: Connection date as an integer key.
+        data_tests:
+          - relationships:
+              arguments:
+                to: ref('dim_date')
+                field: date_key
+      - name: is_new_since_previous_snapshot
+        description: True when the connection was absent from the previous snapshot.
+
+  - name: mart_network_stats
+    description: >
+      One row per snapshot with growth, churn and coverage metrics — the
+      Network Stats tab reads only this model.
+    columns:
+      - name: snapshot_ts
+        data_tests:
+          - unique
+          - not_null
+      - name: total_connections
+        data_tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              arguments:
+                min_value: 0
+                inclusive: true
+      - name: lost_connections
+        description: >
+          Connections present in the previous snapshot and absent from this
+          one. The fact of disappearance only — never a reason (§5).
+      - name: restricted_profile_rows
+        description: >
+          Export rows with no LinkedIn URL (restricted/deactivated profiles),
+          excluded from Gold but counted here so the gap is never silent.
+
+  - name: mart_network_breakdown
+    description: >
+      Tidy distribution table (snapshot_ts, dimension_type, dimension_value)
+      for the Network Stats charts.
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          arguments:
+            combination_of_columns:
+              - snapshot_ts
+              - dimension_type
+              - dimension_value
+    columns:
+      - name: dimension_type
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: ['company', 'position', 'connected_year_month']
+      - name: connection_count
+        data_tests:
+          - not_null
