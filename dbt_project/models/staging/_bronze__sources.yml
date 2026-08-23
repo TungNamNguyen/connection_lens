@@ -1,0 +1,37 @@
+version: 2
+
+sources:
+  - name: bronze
+    description: >
+      Append-only landing table written exclusively by the Airflow ingestion
+      DAG. One batch per genuinely new (non-duplicate) export; values are kept
+      as raw strings — cleaning belongs to Silver.
+    schema: bronze
+    tables:
+      - name: raw_connections
+        description: One row per connection per ingested export snapshot.
+        loaded_at_field: ingested_at
+        freshness:
+          # Stands in for Elementary's freshness monitor: warn when no new
+          # export has been ingested for a month (§12).
+          warn_after: {count: 30, period: day}
+          error_after: {count: 90, period: day}
+        columns:
+          - name: url
+            description: Percent-encoded LinkedIn profile URL; blank for restricted profiles.
+          - name: email_address
+            description: >
+              Present only when the connection opted in — mostly blank by
+              design. Never tested for not_null (§5, §12).
+          - name: snapshot_ts
+            description: Upload timestamp (UTC) recovered from the MinIO object key.
+            data_tests:
+              - not_null
+          - name: file_hash
+            description: MD5 of the uploaded file's bytes — the idempotency key (§5).
+            data_tests:
+              - not_null
+          - name: source_object
+            description: MinIO object key the row was ingested from.
+            data_tests:
+              - not_null
