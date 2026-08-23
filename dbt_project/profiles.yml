@@ -1,0 +1,14 @@
+# DUCKDB_PATH is intentionally required (no default): a hardcoded warehouse
+# path is an anti-pattern here (§17), and failing loudly beats writing a
+# second warehouse file somewhere unexpected.
+connection_lens:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH') }}"
+      threads: 4
+    ci:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH') }}"
+      threads: 2
