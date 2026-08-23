@@ -1,0 +1,40 @@
+[sqlfluff]
+dialect = duckdb
+templater = dbt
+max_line_length = 100
+# Layout of dbt's own generated snapshot/test SQL is not ours to lint.
+# references.keywords: `position` is a reserved word but it is also the export's
+# own column name — renaming it would break the mapping to the source file.
+exclude_rules = structure.column_order, references.consistent, ambiguous.column_count, references.keywords
+
+[sqlfluff:templater:dbt]
+project_dir = ./dbt_project
+profiles_dir = ./dbt_project
+profile = connection_lens
+target = dev
+
+[sqlfluff:indentation]
+indented_joins = false
+indented_using_on = true
+template_blocks_indent = false
+
+[sqlfluff:rules:capitalisation.keywords]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.identifiers]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.functions]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.literals]
+capitalisation_policy = lower
+
+[sqlfluff:rules:capitalisation.types]
+extended_capitalisation_policy = lower
+
+[sqlfluff:rules:aliasing.table]
+aliasing = explicit
+
+[sqlfluff:rules:aliasing.column]
+aliasing = explicit
