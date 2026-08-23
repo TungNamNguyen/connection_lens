@@ -1,0 +1,17 @@
+Notes:
+"When exporting your connection data, you may notice that some of the email addresses are missing. You will only see email addresses for connections who have allowed their connections to see or download their email address using this setting https://www.linkedin.com/psettings/privacy/email. You can learn more here https://www.linkedin.com/help/linkedin/answer/261"
+"This fixture intentionally carries a different number of note lines than v1 so the dynamic header detection is exercised (never a hardcoded skiprows)."
+
+First Name,Last Name,URL,Email Address,Company,Position,Connected On
+Alpha,Testuser,https://www.linkedin.com/in/alpha-testuser-0001,,Example Corporation,Data Analyst,04 Feb 2025
+Bravo,Testuser,https://www.linkedin.com/in/bravo-testuser-0002,,Example Corporation,Technical Recruiter,11 Mar 2025
+"Sierra, Ph.D",Testuser,https://www.linkedin.com/in/sierra-testuser-0003,,Acme Software,Principal Data Engineer,18 Apr 2025
+Delta,Testuser,https://www.linkedin.com/in/delta-testuser-0004,,Ngân hàng TMCP Ví Dụ,Business Intelligence Analyst,02 May 2025
+Echo,Testuser,https://www.linkedin.com/in/echo-testuser-0005,echo.testuser@example.com,Globex,Director Business Intelligence,19 Jun 2025
+Golf,Testuser,https://www.linkedin.com/in/golf-testuser-0007,,Acme Pay,Senior Engineering Manager,08 Aug 2025
+Hotel,Testuser,https://www.linkedin.com/in/hotel-testuser-0008,,,,15 Sep 2025
+India,Testuser,https://www.linkedin.com/in/india-testuser-0009,,Acme Talent,Associate Recruitment Consultant,27 Oct 2025
+Mẫu,Thử,https://www.linkedin.com/in/m%E1%BA%ABu-th%E1%BB%AD-0010,,Acme Labs,Talent Acquisition Partner,03 Nov 2025
+Juliet,Testuser,https://www.linkedin.com/in/juliet-testuser-0011,juliet.testuser@example.com,Example Corporation,Data Scientist,14 Jan 2026
+Kilo,Testuser,https://www.linkedin.com/in/kilo-testuser-0012,,Acme Bank (ACMB),Chief Technology Officer,02 Feb 2026
+,,,,,,12 Nov 2025
