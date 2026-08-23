@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# No deploy step: Connection Lens is a local-only tool. CI exists to keep the
+# pipeline honest — and to prove no real personal data ever reaches the repo.
+env:
+  PYTHON_VERSION: "3.12"
+  CI_DUCKDB: ${{ github.workspace }}/build/ci_warehouse.duckdb
+
+jobs:
+  privacy-guard:
+    name: No real data committed
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail if a real export, warehouse or .env is tracked
+        run: |
+          set -euo pipefail
+          offenders=$(git ls-files \
+            | grep -Ei '(^|/)connections.*\.csv$|\.duckdb$|(^|/)\.env$|(^|/)minio-data/|(^|/)\.claude/' \
+            | grep -v '^tests/fixtures/' || true)
+          if [ -n "$offenders" ]; then
+            echo "::error::These files must never be committed:"
+            echo "$offenders"
+            exit 1
+          fi
+          echo "No real data, warehouse file, secrets or assistant config tracked."
+
+  quality:
+    name: Lint, test and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Install dbt packages
+        run: dbt deps --project-dir dbt_project
+
+      - name: Ruff
+        run: ruff check .
+
+      # Everything below runs against a warehouse built from synthetic
+      # fixtures — never the owner's real export (§13).
+      - name: Seed the CI warehouse (snapshot 1)
+        run: |
+          mkdir -p build
+          python scripts/seed_ci_warehouse.py \
+            --duckdb-path "$CI_DUCKDB" \
+            --fixture tests/fixtures/connections_v1.csv \
+            --overwrite
+
+      - name: sqlfluff lint
+        env:
+          DUCKDB_PATH: ${{ env.CI_DUCKDB }}
+        run: |
+          sqlfluff lint dbt_project/models dbt_project/snapshots dbt_project/tests
+
+      - name: dbt build (snapshot 1)
+        env:
+          DUCKDB_PATH: ${{ env.CI_DUCKDB }}
+          DBT_TARGET: ci
+        run: dbt build --project-dir dbt_project --profiles-dir dbt_project
+
+      # A second, different snapshot proves the SCD2 logic end to end: a
+      # company change, a title change, a departure and two joiners.
+      - name: Seed the CI warehouse (snapshot 2)
+        run: |
+          python scripts/seed_ci_warehouse.py \
+            --duckdb-path "$CI_DUCKDB" \
+            --fixture tests/fixtures/connections_v2.csv \
+            --append
+
+      - name: dbt build (snapshot 2)
+        env:
+          DUCKDB_PATH: ${{ env.CI_DUCKDB }}
+          DBT_TARGET: ci
+        run: dbt build --project-dir dbt_project --profiles-dir dbt_project
+
+      - name: Assert the SCD2 history is what the spec describes
+        env:
+          DUCKDB_PATH: ${{ env.CI_DUCKDB }}
+        run: python scripts/assert_scd2_behaviour.py
+
+      - name: pytest
+        env:
+          # Lets the Streamlit page smoke tests run against a built warehouse
+          # as well as against a missing one.
+          SMOKE_TEST_DUCKDB_PATH: ${{ env.CI_DUCKDB }}
+        run: pytest --cov=common --cov=streamlit_app --cov=services --cov-report=term-missing
+
+  dag-parse:
+    name: Airflow DAG parses
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install Airflow and the DAG's imports
+        run: |
+          python -m pip install --upgrade pip
+          pip install "apache-airflow==2.10.5" \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-${{ env.PYTHON_VERSION }}.txt"
+          pip install -r requirements.txt
+
+      - name: Import the DAG bag
+        env:
+          AIRFLOW_HOME: ${{ runner.temp }}/airflow
+        run: |
+          python - <<'PY'
+          from airflow.models import DagBag
+
+          bag = DagBag("dags", include_examples=False)
+          assert not bag.import_errors, bag.import_errors
+
+          dag = bag.dags["ingest_connections"]
+          # Guard rails the spec calls non-negotiable (§5, §8, §10).
+          assert dag.max_active_runs == 1, "DuckDB is single-writer"
+          assert dag.schedule_interval is None, "this DAG is never on a cron"
+          assert dag.catchup is False
+          print(f"OK: {len(dag.tasks)} tasks parsed")
+          PY
