@@ -1,0 +1,20 @@
+# Shared runtime dependencies — every environment in this project installs
+# these: the Airflow image, the dbt virtualenv inside it, the Streamlit image,
+# the event listener and the local dev venv.
+#
+# What each environment adds on top:
+#   Airflow image   great_expectations          (docker/airflow/Dockerfile)
+#   dbt virtualenv  requirements-dbt.txt        (docker/airflow/Dockerfile)
+#   Streamlit image streamlit, altair           (docker/streamlit/Dockerfile)
+#   listener image  fastapi, uvicorn            (docker/listener/Dockerfile)
+#   local dev       all of the above + tooling  (requirements-dev.txt)
+#
+# Ranges rather than tight pins: the Airflow image installs these under
+# Airflow's own constraints file, which pins pandas to 2.1.4.
+duckdb>=1.1,<2.0
+pandas>=2.1,<3.0
+minio>=7.2,<8.0
+requests>=2.31,<3.0
+pydantic>=2.7,<3.0
+pydantic-settings>=2.4,<3.0
+python-dotenv>=1.0,<2.0
