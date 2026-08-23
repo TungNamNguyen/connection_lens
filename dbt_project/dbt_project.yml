@@ -1,0 +1,43 @@
+name: connection_lens
+version: 1.0.0
+config-version: 2
+
+profile: connection_lens
+
+model-paths: ["models"]
+snapshot-paths: ["snapshots"]
+macro-paths: ["macros"]
+test-paths: ["tests"]
+seed-paths: ["seeds"]
+
+target-path: "target"
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+require-dbt-version: [">=1.10.0", "<2.0.0"]
+
+models:
+  connection_lens:
+    # Silver — cleaned, typed, still one row per connection per snapshot.
+    staging:
+      +schema: silver
+      +materialized: table
+    # Gold + marts — Kimball star schema, analytics ready.
+    marts:
+      +schema: gold
+      +materialized: table
+      mart_network_stats:
+        +schema: mart
+      mart_network_breakdown:
+        +schema: mart
+
+snapshots:
+  connection_lens:
+    +target_schema: gold
+
+vars:
+  # Any connection whose LinkedIn URL is blank cannot be given a stable
+  # identity, so it is excluded from Gold and counted separately instead of
+  # being dropped silently. See docs/data_quality.md.
+  min_identifiable_share: 0.90
