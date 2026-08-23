@@ -1,0 +1,259 @@
+# Connection Lens — the whole local stack in one file.
+#
+#   MinIO                landing zone (§4); keeps every uploaded object,
+#                        duplicates included, as the upload audit trail (§5)
+#   Airflow              orchestration (§8); never on a cron, only triggered
+#   Streamlit            the four-tab app (§9), warehouse mounted read-only
+#   minio-event-listener trigger mode 2: bucket notification -> Airflow REST
+#
+#   docker compose up -d          # everything
+#   docker compose up -d minio    # just the landing zone
+name: connection-lens
+
+# ---------------------------------------------------------------------------
+# Shared fragments
+# ---------------------------------------------------------------------------
+x-minio-settings: &minio-settings
+  MINIO_ENDPOINT: minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?set MINIO_ACCESS_KEY in .env}
+  MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?set MINIO_SECRET_KEY in .env}
+  MINIO_SECURE: "false"
+  MINIO_BUCKET: ${MINIO_BUCKET:-connection-lens}
+  MINIO_RAW_PREFIX: ${MINIO_RAW_PREFIX:-raw/linkedin_connections}
+
+x-airflow-common: &airflow-common
+  build:
+    context: .
+    dockerfile: docker/airflow/Dockerfile
+  image: connection-lens/airflow:2.10.5
+  environment: &airflow-common-env
+    <<: *minio-settings
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/connection_lens/dags
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_POSTGRES_PASSWORD:?set AIRFLOW_POSTGRES_PASSWORD in .env}@airflow-postgres:5432/airflow
+    # Basic auth on the stable REST API — what the Streamlit Job Management
+    # tab and the event listener authenticate with (see docs/adr §11).
+    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.session,airflow.api.auth.backend.basic_auth
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
+    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+    PYTHONPATH: /opt/connection_lens
+    DUCKDB_PATH: /opt/connection_lens/data/warehouse/warehouse.duckdb
+    DBT_PROJECT_DIR: /opt/connection_lens/dbt_project
+    DBT_PROFILES_DIR: /opt/connection_lens/dbt_project
+    DBT_TARGET: ${DBT_TARGET:-dev}
+  volumes:
+    - ./dags:/opt/connection_lens/dags:ro
+    - ./common:/opt/connection_lens/common:ro
+    - ./dbt_project:/opt/connection_lens/dbt_project
+    - ./great_expectations:/opt/connection_lens/great_expectations:ro
+    - ./scripts:/opt/connection_lens/scripts:ro
+    - ./data:/opt/connection_lens/data
+    - airflow-logs:/opt/airflow/logs
+  # Run as the host user so the bind-mounted DuckDB file stays writable.
+  user: "${AIRFLOW_UID:-50000}:0"
+  networks: [connection-lens]
+
+x-app-environment: &app-environment
+  <<: *minio-settings
+  PYTHONPATH: /opt/connection_lens
+  DUCKDB_PATH: /opt/connection_lens/data/warehouse/warehouse.duckdb
+  AIRFLOW_API_BASE_URL: http://airflow-webserver:8080
+  AIRFLOW_API_USERNAME: ${AIRFLOW_API_USERNAME:-airflow}
+  AIRFLOW_API_PASSWORD: ${AIRFLOW_API_PASSWORD:?set AIRFLOW_API_PASSWORD in .env}
+  AIRFLOW_DAG_ID: ${AIRFLOW_DAG_ID:-ingest_connections}
+  MINIO_EVENT_LISTENER_TOKEN: ${MINIO_EVENT_LISTENER_TOKEN:-}
+
+services:
+  # -------------------------------------------------------------------------
+  # Landing zone
+  # -------------------------------------------------------------------------
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    container_name: connection-lens-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER in .env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD in .env}
+      # Trigger mode 2 (§8). Off by default: turn it on with
+      # MINIO_WEBHOOK_ENABLE=on, then register the event with `make minio-events`.
+      MINIO_NOTIFY_WEBHOOK_ENABLE_CONNECTIONLENS: ${MINIO_WEBHOOK_ENABLE:-off}
+      MINIO_NOTIFY_WEBHOOK_ENDPOINT_CONNECTIONLENS: http://minio-event-listener:8000/minio/events
+      MINIO_NOTIFY_WEBHOOK_AUTH_TOKEN_CONNECTIONLENS: ${MINIO_EVENT_LISTENER_TOKEN:-}
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console
+    volumes:
+      - minio-data:/data
+    # MinIO validates the webhook endpoint while starting, so the listener has
+    # to be answering before it comes up.
+    depends_on:
+      minio-event-listener:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [connection-lens]
+    restart: unless-stopped
+
+  # One-shot: create the bucket the app uploads to.
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    container_name: connection-lens-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET:-connection-lens}
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD} &&
+      mc mb --ignore-existing local/$${MINIO_BUCKET} &&
+      mc version enable local/$${MINIO_BUCKET} || true;
+      echo 'Bucket ready: '$${MINIO_BUCKET}
+      "
+    networks: [connection-lens]
+
+  # -------------------------------------------------------------------------
+  # Orchestration
+  # -------------------------------------------------------------------------
+  airflow-postgres:
+    image: postgres:16-alpine
+    container_name: connection-lens-airflow-db
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_POSTGRES_PASSWORD:?set AIRFLOW_POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [connection-lens]
+    restart: unless-stopped
+
+  # Uses the official image's own bootstrap hooks rather than a custom
+  # entrypoint: that is what lets the container run as an arbitrary host UID
+  # (needed so the bind-mounted DuckDB file stays writable).
+  airflow-init:
+    <<: *airflow-common
+    container_name: connection-lens-airflow-init
+    command: version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_MIGRATE: "true"
+      _AIRFLOW_WWW_USER_CREATE: "true"
+      _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_ADMIN_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?set AIRFLOW_ADMIN_PASSWORD in .env}
+      _AIRFLOW_WWW_USER_ROLE: Admin
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+    restart: on-failure
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: connection-lens-airflow-scheduler
+    command: scheduler
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type SchedulerJob --hostname \"$${HOSTNAME}\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: connection-lens-airflow-webserver
+    command: webserver
+    ports:
+      - "8080:8080"
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  # -------------------------------------------------------------------------
+  # Serving
+  # -------------------------------------------------------------------------
+  streamlit:
+    build:
+      context: .
+      dockerfile: docker/streamlit/Dockerfile
+    image: connection-lens/streamlit:1.0.0
+    container_name: connection-lens-streamlit
+    environment: *app-environment
+    # The warehouse is mounted read-only: Streamlit must never be able to
+    # write to Bronze/Gold, whatever the code does (§10, §17).
+    volumes:
+      - ./streamlit_app:/opt/connection_lens/streamlit_app:ro
+      - ./common:/opt/connection_lens/common:ro
+      - ./data:/opt/connection_lens/data:ro
+    ports:
+      - "8501:8501"
+    user: "${AIRFLOW_UID:-1000}:0"
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8501/_stcore/health')\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks: [connection-lens]
+    restart: unless-stopped
+
+  minio-event-listener:
+    build:
+      context: .
+      dockerfile: docker/listener/Dockerfile
+    image: connection-lens/minio-event-listener:1.0.0
+    container_name: connection-lens-minio-event-listener
+    environment: *app-environment
+    volumes:
+      - ./services:/opt/connection_lens/services:ro
+      - ./common:/opt/connection_lens/common:ro
+    ports:
+      - "${MINIO_EVENT_LISTENER_PORT:-8000}:8000"
+    # Short interval: MinIO waits for this to report healthy before starting.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 5s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    networks: [connection-lens]
+    restart: unless-stopped
+
+volumes:
+  minio-data:
+    name: connection-lens-minio-data
+  airflow-postgres-data:
+    name: connection-lens-airflow-db
+  airflow-logs:
+    name: connection-lens-airflow-logs
+
+networks:
+  connection-lens:
+    name: connection-lens
