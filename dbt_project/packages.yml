@@ -1,0 +1,6 @@
+# Macro-only packages (no models are materialised by these).
+packages:
+  - package: dbt-labs/dbt_utils
+    version: [">=1.3.0", "<2.0.0"]
+  - package: metaplane/dbt_expectations
+    version: [">=0.10.0", "<0.11.0"]
