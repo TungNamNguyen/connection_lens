@@ -1,0 +1,10 @@
+# dbt is deliberately NOT merged into requirements.txt.
+#
+# dbt-core and Airflow pin conflicting versions of shared libraries, so
+# installing both into one interpreter fails outright (pip: ResolutionImpossible).
+# The Airflow image therefore installs this file into its own virtualenv at
+# /home/airflow/dbt-venv and calls `dbt` as a CLI — see docker/airflow/Dockerfile
+# and docs/architecture_decisions.md §9.
+-r requirements.txt
+dbt-core~=1.9
+dbt-duckdb~=1.9
