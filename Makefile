@@ -30,8 +30,33 @@ venv:  ## Create .venv from uv.lock with every dependency group
 	$(UV) sync --frozen
 
 .PHONY: lock
-lock:  ## Re-resolve uv.lock after editing pyproject.toml
+lock: requirements.txt  ## Re-resolve uv.lock after editing pyproject.toml
 	$(UV) lock
+
+# The Docker images install from this file rather than from uv.lock directly,
+# so it is generated, committed, and checked for drift in CI.
+# `airflow` is deliberately NOT exported: Airflow comes from its base image,
+# and reinstalling it on top conflicts with the providers already there.
+EXPORT_GROUPS := --group app --group listener --group quality --group dbt
+
+.PHONY: requirements
+requirements: requirements.txt  ## Regenerate requirements.txt from uv.lock
+
+requirements.txt: pyproject.toml uv.lock
+	$(UV) export --frozen --no-emit-project --no-default-groups \
+		$(EXPORT_GROUPS) --output-file $@
+
+.PHONY: requirements-check
+requirements-check:  ## Fail if requirements.txt is out of date with uv.lock
+	@mkdir -p build
+	# The echoed command line differs by output path, so compare the pins only.
+	@$(UV) export --frozen --no-emit-project --no-default-groups \
+		$(EXPORT_GROUPS) --output-file - \
+		| grep -v '^#    uv export' > build/requirements.expected
+	@grep -v '^#    uv export' requirements.txt > build/requirements.committed
+	@diff -u build/requirements.committed build/requirements.expected \
+		&& echo "requirements.txt is in sync with uv.lock" \
+		|| { echo "requirements.txt is stale — run: make requirements"; exit 1; }
 
 .PHONY: outdated
 outdated:  ## Show which locked dependencies have newer releases
@@ -88,7 +113,7 @@ dag-check:  ## Parse the DAG under real Airflow and assert its guard rails
 	print(f'OK: {len(dag.tasks)} tasks parsed')"
 
 .PHONY: check
-check: lint test ci-warehouse dag-check  ## Everything CI runs, locally
+check: requirements-check lint test ci-warehouse dag-check  ## Everything CI runs, locally
 
 # --- dbt on the real warehouse ---------------------------------------------
 .PHONY: dbt-build
