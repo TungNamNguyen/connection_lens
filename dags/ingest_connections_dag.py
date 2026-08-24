@@ -23,8 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from airflow.decorators import dag, task, task_group
-from airflow.models.param import Param
+from airflow.sdk import Param, dag, task, task_group
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
