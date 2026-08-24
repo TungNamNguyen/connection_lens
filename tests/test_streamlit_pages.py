@@ -98,3 +98,29 @@ def test_job_search_scores_when_a_target_company_is_set(built_warehouse: Path) -
     assert target, "the Job Search tab must expose a target-company input"
     target[0].set_value("Example Corporation").run()
     assert_no_exception(app, "3_job_search.py (scored)")
+
+
+def test_airflow_link_points_at_the_browser_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inside Docker the API host is unreachable from the viewer's browser.
+
+    The Job Management tab talks to `airflow-apiserver:8080` but must *link* to
+    the address a human can actually open.
+    """
+    monkeypatch.setenv("DUCKDB_PATH", str(tmp_path / "missing.duckdb"))
+    monkeypatch.setenv("AIRFLOW_API_BASE_URL", "http://airflow-apiserver:8080")
+    monkeypatch.setenv("AIRFLOW_PUBLIC_URL", "http://localhost:8080")
+    monkeypatch.setenv("AIRFLOW_API_PASSWORD", "not-a-real-password")
+    get_settings.cache_clear()
+    db.clear_caches()
+    try:
+        app = run_page("streamlit_app/pages/4_job_management.py")
+        assert_no_exception(app, "4_job_management.py")
+
+        rendered = " ".join(str(item.value) for item in app.markdown)
+        assert "http://localhost:8080/dags/ingest_connections" in rendered
+        assert "airflow-apiserver" not in rendered
+    finally:
+        get_settings.cache_clear()
+        db.clear_caches()
