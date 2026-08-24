@@ -80,24 +80,35 @@ The Airflow REST client is used by Streamlit *and* the event listener. Keeping
 one implementation in `common/` beats two copies drifting apart in
 `streamlit_app/`.
 
-## 9. One lockfile, one environment per image
+## 9. uv.lock is the source of truth; requirements.txt is what images install
 
-`uv.lock` pins every dependency for every environment; each Docker image
-installs the project dependencies plus only the dependency groups it imports,
-so the Streamlit image carries no dbt and the listener carries no Streamlit.
+`uv.lock` pins every dependency. `make requirements` exports the runtime
+groups into a committed `requirements.txt`, and the three Dockerfiles simply
+`pip install -r requirements.txt`. CI runs `make requirements-check` and fails
+if the file has drifted from the lock, which is the one real weakness of a
+generated file that lives in the repo.
 
-Under Airflow 2 this was impossible: applying Airflow's constraints file next
-to dbt-core ends in `ResolutionImpossible`, so dbt needed its own virtualenv
-inside the image. Airflow 3.1.8, dbt and Great Expectations resolve into one
-consistent set, so both now share a single interpreter.
+**`apache-airflow` is excluded from that export on purpose.** Exporting it too
+was measured: pip then reports five conflicts against packages the base image
+already ships, and quietly moves Flask 2.2.5 → 3.1.3, Flask-Limiter 3.12 → 4.1.1
+and Werkzeug 2.2.3 → 3.1.8 — the exact libraries behind the auth manager that
+serves `/auth/token`. Letting the base image own Airflow's own tree avoids all
+of it.
 
-The lock still has to stay installable **on top of the Airflow base image**,
-which ships its own provider packages. That is why `constraint-dependencies`
-holds `cryptography` in the range the image was built for: the google and
-snowflake providers load pyOpenSSL, and pyOpenSSL fails to import the moment
-cryptography moves ahead of it. Great Expectations imports the Snowflake
-connector on the way in, so an unconstrained upgrade silently broke the
-data-quality task. One line in `pyproject.toml` keeps the two in step.
+Two related pins are worth knowing:
+
+* `constraint-dependencies` holds `cryptography` in the range the base image
+  was built for. The google and snowflake providers load pyOpenSSL, which
+  fails to import the moment cryptography moves ahead of it, and Great
+  Expectations imports the Snowflake connector on its way in.
+* dbt brings `protobuf 6`, while the OpenTelemetry packages bundled with
+  Airflow expect `protobuf < 5`. That conflict is real but inert: Airflow only
+  imports the OTel exporter when `AIRFLOW__METRICS__OTEL_ON` is true, and it is
+  false by default. Turning OTel metrics on would mean giving dbt its own
+  virtualenv again.
+
+Under Airflow 2 none of this was possible — its constraints file plus dbt-core
+ends in `ResolutionImpossible`, so dbt needed a separate virtualenv regardless.
 
 ## 10. Failing loudly beats coping quietly
 
