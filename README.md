@@ -52,15 +52,17 @@ flowchart TD
     G -.status & logs via REST.-> R[Streamlit: Job Management]
 ```
 
-**Stack:** DuckDB · MinIO · Airflow 2.10 · dbt-duckdb · Great Expectations ·
-Streamlit · FastAPI · pytest · sqlfluff · GitHub Actions.
+**Stack:** DuckDB · MinIO · Airflow 3.1 · dbt-duckdb · Great Expectations ·
+Streamlit · FastAPI · uv · pytest · sqlfluff · GitHub Actions.
 
 ---
 
 ## Quickstart
 
 ```bash
-# 1. Python environment (everything lives in .venv — nothing system-wide)
+# 1. Python environment. Dependencies are locked in uv.lock and installed
+#    into .venv — nothing lands system-wide.
+#    (uv itself: https://docs.astral.sh/uv/getting-started/installation/)
 make venv
 make dbt-deps
 
@@ -121,6 +123,8 @@ connection_lens/
 ├── tests/                        # pytest, synthetic fixtures only
 ├── docker/                       # Dockerfiles for Airflow, Streamlit, listener
 ├── docker-compose.yml            # the whole local stack: MinIO, Airflow, app
+├── pyproject.toml                # dependencies by group + tool config
+├── uv.lock                       # the exact versions every environment gets
 └── .github/workflows/ci.yml
 ```
 
@@ -209,9 +213,10 @@ A few things worth knowing if you read the code:
   Airflow REST client is used by both Streamlit and the event listener.
   Hoisting them out of `streamlit_app/` keeps a single implementation and
   keeps both unit-testable.
-* **dbt runs from its own virtualenv inside the Airflow image.** dbt-core and
-  Airflow pin conflicting versions of shared libraries, so dbt is installed to
-  `/home/airflow/dbt-venv` and invoked as a CLI.
+* **One lockfile governs every environment.** `uv.lock` pins the exact
+  versions the local venv, all three images and CI install — the Airflow image
+  simply installs a different subset of dependency groups. Airflow 3 and dbt
+  share a single interpreter there, which Airflow 2 could not do.
 * **Restricted profiles.** A real export contains rows with *only* a
   connection date — LinkedIn's representation of a restricted or deactivated
   profile. They cannot be given a stable identity, so they are flagged in
