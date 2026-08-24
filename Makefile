@@ -1,10 +1,10 @@
 # Connection Lens — developer entrypoints.
-# Everything runs inside the project virtualenv (.venv); nothing is installed
-# system-wide.
+# Dependencies are locked in uv.lock and installed into the project virtualenv
+# (.venv) by `uv sync`; nothing is installed system-wide.
 
+UV          := uv
 VENV        := .venv
 PY          := $(VENV)/bin/python
-PIP         := $(VENV)/bin/pip
 DBT         := $(VENV)/bin/dbt
 PYTEST      := $(VENV)/bin/pytest
 SQLFLUFF    := $(VENV)/bin/sqlfluff
@@ -26,14 +26,22 @@ help:  ## Show this help
 
 # --- setup -----------------------------------------------------------------
 .PHONY: venv
-venv:  ## Create the virtualenv and install every dev dependency
-	python3 -m venv $(VENV)
-	$(PIP) install --upgrade pip
-	$(PIP) install -r requirements-dev.txt
+venv:  ## Create .venv from uv.lock with every dependency group
+	$(UV) sync --frozen
+
+.PHONY: lock
+lock:  ## Re-resolve uv.lock after editing pyproject.toml
+	$(UV) lock
+
+.PHONY: outdated
+outdated:  ## Show which locked dependencies have newer releases
+	$(UV) lock --upgrade --dry-run
 
 .PHONY: dbt-deps
 dbt-deps:  ## Install the dbt packages (dbt_utils, dbt_expectations)
-	cd dbt_project && ../$(DBT) deps
+	# Always pass the directories explicitly: dbt also reads DBT_PROJECT_DIR
+	# from .env, and that relative path only resolves from the repo root.
+	$(DBT) deps $(DBT_ARGS)
 
 .PHONY: env
 env:  ## Create .env from the example and pin AIRFLOW_UID to your user
@@ -68,22 +76,15 @@ ci-warehouse:  ## Build a throwaway warehouse from synthetic fixtures
 		--fixture tests/fixtures/connections_v2.csv --append
 	DUCKDB_PATH=$(CI_DUCKDB) $(DBT) build $(DBT_ARGS)
 
-.PHONY: venv-airflow
-venv-airflow:  ## Second venv holding Airflow, for parsing the DAG without Docker
-	python3 -m venv .venv-airflow
-	.venv-airflow/bin/pip install --upgrade pip
-	.venv-airflow/bin/pip install "apache-airflow==2.10.5" \
-		--constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt"
-	.venv-airflow/bin/pip install -r requirements.txt
-
 .PHONY: dag-check
 dag-check:  ## Parse the DAG under real Airflow and assert its guard rails
-	AIRFLOW_HOME=$(CURDIR)/build/airflow .venv-airflow/bin/python -c "\
+	@mkdir -p build
+	AIRFLOW_HOME=$(CURDIR)/build/airflow $(PY) -c "\
 	from airflow.models import DagBag; \
 	bag = DagBag('dags', include_examples=False); \
 	assert not bag.import_errors, bag.import_errors; \
 	dag = bag.dags['ingest_connections']; \
-	assert dag.max_active_runs == 1 and dag.schedule_interval is None and dag.catchup is False; \
+	assert dag.max_active_runs == 1 and dag.schedule is None and dag.catchup is False; \
 	print(f'OK: {len(dag.tasks)} tasks parsed')"
 
 .PHONY: check
