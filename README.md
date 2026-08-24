@@ -125,6 +125,7 @@ connection_lens/
 ├── docker-compose.yml            # the whole local stack: MinIO, Airflow, app
 ├── pyproject.toml                # dependencies by group + tool config
 ├── uv.lock                       # the exact versions every environment gets
+├── requirements.txt              # generated from uv.lock; what the images install
 └── .github/workflows/ci.yml
 ```
 
@@ -182,7 +183,7 @@ enough to identify anyone.
 ## Testing, quality and CI
 
 ```bash
-make check        # ruff + sqlfluff + pytest + a two-snapshot dbt build
+make check        # requirements drift + ruff + sqlfluff + pytest + dbt build
 ```
 
 | Layer | What it checks |
@@ -213,10 +214,14 @@ A few things worth knowing if you read the code:
   Airflow REST client is used by both Streamlit and the event listener.
   Hoisting them out of `streamlit_app/` keeps a single implementation and
   keeps both unit-testable.
-* **One lockfile governs every environment.** `uv.lock` pins the exact
-  versions the local venv, all three images and CI install — the Airflow image
-  simply installs a different subset of dependency groups. Airflow 3 and dbt
-  share a single interpreter there, which Airflow 2 could not do.
+* **One lockfile, one generated requirements file.** `uv.lock` pins every
+  version; `make requirements` exports the runtime groups into the committed
+  `requirements.txt` that all three images `pip install`, and CI fails if that
+  file drifts from the lock. Airflow itself is deliberately absent from it —
+  it comes from the base image, and reinstalling it from the lock moves Flask,
+  Werkzeug and the OpenTelemetry stack out from under the providers already
+  installed there. Airflow 3 and dbt do share one interpreter, which Airflow 2
+  could not.
 * **Restricted profiles.** A real export contains rows with *only* a
   connection date — LinkedIn's representation of a restricted or deactivated
   profile. They cannot be given a stable identity, so they are flagged in
