@@ -1,5 +1,68 @@
-# Connection Lens is a local-only application, not a distributable package —
-# this file only carries tool configuration.
+# Connection Lens — a local-only application, not a distributable package.
+# `[tool.uv] package = false` keeps uv from trying to build it; the lockfile
+# still pins every dependency exactly, which is the point.
+
+[project]
+name = "connection-lens"
+version = "1.0.0"
+description = "Turn a LinkedIn connections export into network analytics and warm-intro signal"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=1.1,<2.0",
+    "pandas>=2.1,<3.0",
+    "minio>=7.2,<8.0",
+    "requests>=2.31,<3.0",
+    "pydantic>=2.7,<3.0",
+    "pydantic-settings>=2.4,<3.0",
+    "python-dotenv>=1.0,<2.0",
+]
+
+# One group per runtime. Each Docker image installs the project dependencies
+# plus only the groups it actually imports; `dev` pulls in everything so a
+# single local venv can run the app, dbt, Airflow and the test suite.
+[dependency-groups]
+app = [
+    "streamlit>=1.40,<2.0",
+    "altair>=5.4,<6.0",
+]
+listener = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.32,<1.0",
+]
+quality = [
+    "great-expectations>=1.3,<2.0",
+]
+dbt = [
+    "dbt-core>=1.9,<2.0",
+    "dbt-duckdb>=1.9,<2.0",
+]
+airflow = [
+    "apache-airflow==3.1.8",
+    "apache-airflow-providers-fab>=2.0",
+]
+dev = [
+    {include-group = "app"},
+    {include-group = "listener"},
+    {include-group = "quality"},
+    {include-group = "dbt"},
+    {include-group = "airflow"},
+    "pytest>=8.3,<9.0",
+    "pytest-cov>=6.0,<8.0",
+    "httpx>=0.27,<1.0",
+    "sqlfluff>=3.2,<5.0",
+    "sqlfluff-templater-dbt>=3.2,<5.0",
+    "ruff>=0.7,<1.0",
+]
+
+[tool.uv]
+package = false
+
+# The Airflow base image ships providers (google, snowflake) that load
+# pyOpenSSL, and pyOpenSSL breaks the moment cryptography moves ahead of it
+# ("module 'lib' has no attribute 'GEN_EMAIL'"). Pinning cryptography to the
+# range the image was built against keeps the lock installable on top of it.
+constraint-dependencies = ["cryptography>=42,<43"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
