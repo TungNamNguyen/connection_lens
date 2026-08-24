@@ -50,6 +50,11 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
+      # The Docker images install from requirements.txt, so a stale file means
+      # the images and the lock disagree. Catch it here rather than in a build.
+      - name: requirements.txt is in sync with uv.lock
+        run: make requirements-check
+
       - name: Install dbt packages
         run: uv run dbt deps --project-dir dbt_project
 
