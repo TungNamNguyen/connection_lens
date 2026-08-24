@@ -38,12 +38,18 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     minio_bucket: str = "connection-lens"
     minio_raw_prefix: str = "raw/linkedin_connections"
+    #: Browser-facing MinIO console, for the same reason as `airflow_public_url`.
+    minio_public_url: str = "http://localhost:9001"
 
     # --- DuckDB ------------------------------------------------------------
     duckdb_path: Path = Path("./data/warehouse/warehouse.duckdb")
 
     # --- Airflow REST API --------------------------------------------------
     airflow_api_base_url: str = "http://localhost:8080"
+    #: Browser-facing Airflow URL. Inside Docker the API is reached at
+    #: http://airflow-apiserver:8080, which the host's browser cannot resolve,
+    #: so every link rendered in the UI has to point here instead.
+    airflow_public_url: str = "http://localhost:8080"
     airflow_api_username: str = "airflow"
     airflow_api_password: SecretStr = SecretStr("")
     airflow_dag_id: str = "ingest_connections"
