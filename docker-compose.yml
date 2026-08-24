@@ -25,19 +25,23 @@ x-airflow-common: &airflow-common
   build:
     context: .
     dockerfile: docker/airflow/Dockerfile
-  image: connection-lens/airflow:2.10.5
+  image: connection-lens/airflow:3.1.8
   environment: &airflow-common-env
     <<: *minio-settings
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    # FAB supplies the JWT `/auth/token` endpoint the Streamlit tab and the
+    # event listener authenticate with (docs/architecture_decisions.md §11).
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__CORE__DAGS_FOLDER: /opt/connection_lens/dags
     AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+    # Airflow 3: workers reach the scheduler through the execution API.
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_POSTGRES_PASSWORD:?set AIRFLOW_POSTGRES_PASSWORD in .env}@airflow-postgres:5432/airflow
-    # Basic auth on the stable REST API — what the Streamlit Job Management
-    # tab and the event listener authenticate with (see docs/adr §11).
-    AIRFLOW__API__AUTH_BACKENDS: airflow.api.auth.backend.session,airflow.api.auth.backend.basic_auth
-    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "false"
-    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: "30"
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?set AIRFLOW_JWT_SECRET in .env}
+    AIRFLOW__API__BASE_URL: ${AIRFLOW_PUBLIC_URL:-http://localhost:8080}
+    AIRFLOW__API__EXPOSE_CONFIG: "false"
+    AIRFLOW__DAG_PROCESSOR__REFRESH_INTERVAL: "30"
     PYTHONPATH: /opt/connection_lens
     DUCKDB_PATH: /opt/connection_lens/data/warehouse/warehouse.duckdb
     DBT_PROJECT_DIR: /opt/connection_lens/dbt_project
@@ -59,7 +63,11 @@ x-app-environment: &app-environment
   <<: *minio-settings
   PYTHONPATH: /opt/connection_lens
   DUCKDB_PATH: /opt/connection_lens/data/warehouse/warehouse.duckdb
-  AIRFLOW_API_BASE_URL: http://airflow-webserver:8080
+  AIRFLOW_API_BASE_URL: http://airflow-apiserver:8080
+  # Links rendered in the browser must resolve from the host, not from inside
+  # the Docker network.
+  AIRFLOW_PUBLIC_URL: ${AIRFLOW_PUBLIC_URL:-http://localhost:8080}
+  MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-http://localhost:9001}
   AIRFLOW_API_USERNAME: ${AIRFLOW_API_USERNAME:-airflow}
   AIRFLOW_API_PASSWORD: ${AIRFLOW_API_PASSWORD:?set AIRFLOW_API_PASSWORD in .env}
   AIRFLOW_DAG_ID: ${AIRFLOW_DAG_ID:-ingest_connections}
@@ -176,10 +184,12 @@ services:
       retries: 5
     restart: unless-stopped
 
-  airflow-webserver:
+  # Airflow 3 splits the old `webserver` into an API server, and requires the
+  # DAG processor to run as its own service.
+  airflow-apiserver:
     <<: *airflow-common
-    container_name: connection-lens-airflow-webserver
-    command: webserver
+    container_name: connection-lens-airflow-apiserver
+    command: api-server
     ports:
       - "8080:8080"
     depends_on:
@@ -188,7 +198,23 @@ services:
       airflow-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/monitor/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: unless-stopped
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: connection-lens-airflow-dag-processor
+    command: dag-processor
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "airflow jobs check --job-type DagProcessorJob --hostname \"$${HOSTNAME}\""]
       interval: 30s
       timeout: 10s
       retries: 5
