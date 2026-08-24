@@ -50,10 +50,10 @@ status_columns = st.columns([2, 2, 3])
 status_columns[0].markdown(
     f"**Airflow** {'✅ healthy' if healthy else '⚠️ unreachable'}"
 )
-status_columns[0].caption(settings.airflow_api_base_url)
+status_columns[0].caption(settings.airflow_public_url)
 status_columns[1].markdown(f"**DAG** `{settings.airflow_dag_id}`")
 status_columns[2].markdown(
-    f"[Open the Airflow UI ↗]({settings.airflow_api_base_url}/dags/{settings.airflow_dag_id})"
+    f"[Open the Airflow UI ↗]({settings.airflow_public_url}/dags/{settings.airflow_dag_id})"
 )
 
 if not healthy:
