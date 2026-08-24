@@ -9,6 +9,7 @@ on:
 # pipeline honest — and to prove no real personal data ever reaches the repo.
 env:
   PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.10.11"
   CI_DUCKDB: ${{ github.workspace }}/build/ci_warehouse.duckdb
 
 jobs:
@@ -37,29 +38,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
-          cache-dependency-path: requirements-dev.txt
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
+      # --frozen: fail if uv.lock is out of date with pyproject.toml, rather
+      # than silently resolving something different from local development.
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+        run: uv sync --frozen
 
       - name: Install dbt packages
-        run: dbt deps --project-dir dbt_project
+        run: uv run dbt deps --project-dir dbt_project
 
       - name: Ruff
-        run: ruff check .
+        run: uv run ruff check .
 
       # Everything below runs against a warehouse built from synthetic
       # fixtures — never the owner's real export (§13).
       - name: Seed the CI warehouse (snapshot 1)
         run: |
           mkdir -p build
-          python scripts/seed_ci_warehouse.py \
+          uv run scripts/seed_ci_warehouse.py \
             --duckdb-path "$CI_DUCKDB" \
             --fixture tests/fixtures/connections_v1.csv \
             --overwrite
@@ -68,19 +70,19 @@ jobs:
         env:
           DUCKDB_PATH: ${{ env.CI_DUCKDB }}
         run: |
-          sqlfluff lint dbt_project/models dbt_project/snapshots dbt_project/tests
+          uv run sqlfluff lint dbt_project/models dbt_project/snapshots dbt_project/tests
 
       - name: dbt build (snapshot 1)
         env:
           DUCKDB_PATH: ${{ env.CI_DUCKDB }}
           DBT_TARGET: ci
-        run: dbt build --project-dir dbt_project --profiles-dir dbt_project
+        run: uv run dbt build --project-dir dbt_project --profiles-dir dbt_project
 
       # A second, different snapshot proves the SCD2 logic end to end: a
       # company change, a title change, a departure and two joiners.
       - name: Seed the CI warehouse (snapshot 2)
         run: |
-          python scripts/seed_ci_warehouse.py \
+          uv run scripts/seed_ci_warehouse.py \
             --duckdb-path "$CI_DUCKDB" \
             --fixture tests/fixtures/connections_v2.csv \
             --append
@@ -89,19 +91,19 @@ jobs:
         env:
           DUCKDB_PATH: ${{ env.CI_DUCKDB }}
           DBT_TARGET: ci
-        run: dbt build --project-dir dbt_project --profiles-dir dbt_project
+        run: uv run dbt build --project-dir dbt_project --profiles-dir dbt_project
 
       - name: Assert the SCD2 history is what the spec describes
         env:
           DUCKDB_PATH: ${{ env.CI_DUCKDB }}
-        run: python scripts/assert_scd2_behaviour.py
+        run: uv run scripts/assert_scd2_behaviour.py
 
       - name: pytest
         env:
           # Lets the Streamlit page smoke tests run against a built warehouse
           # as well as against a missing one.
           SMOKE_TEST_DUCKDB_PATH: ${{ env.CI_DUCKDB }}
-        run: pytest --cov=common --cov=streamlit_app --cov=services --cov-report=term-missing
+        run: uv run pytest --cov=common --cov=streamlit_app --cov=services --cov-report=term-missing
 
   dag-parse:
     name: Airflow DAG parses
@@ -109,23 +111,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
-          cache: pip
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
+      # Only the project dependencies plus Airflow — the same versions the
+      # image gets, resolved once in uv.lock.
       - name: Install Airflow and the DAG's imports
-        run: |
-          python -m pip install --upgrade pip
-          pip install "apache-airflow==2.10.5" \
-            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-${{ env.PYTHON_VERSION }}.txt"
-          pip install -r requirements.txt
+        run: uv sync --frozen --no-default-groups --group airflow
 
       - name: Import the DAG bag
         env:
           AIRFLOW_HOME: ${{ runner.temp }}/airflow
         run: |
-          python - <<'PY'
+          uv run python - <<'PY'
           from airflow.models import DagBag
 
           bag = DagBag("dags", include_examples=False)
@@ -134,7 +136,7 @@ jobs:
           dag = bag.dags["ingest_connections"]
           # Guard rails the spec calls non-negotiable (§5, §8, §10).
           assert dag.max_active_runs == 1, "DuckDB is single-writer"
-          assert dag.schedule_interval is None, "this DAG is never on a cron"
+          assert dag.schedule is None, "this DAG is never on a cron"
           assert dag.catchup is False
           print(f"OK: {len(dag.tasks)} tasks parsed")
           PY
