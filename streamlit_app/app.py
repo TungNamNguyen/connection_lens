@@ -67,7 +67,7 @@ with col_minio:
 with col_airflow:
     st.markdown("**Orchestration**")
     st.write(f"DAG `{settings.airflow_dag_id}`")
-    st.caption(f"{settings.airflow_api_base_url} — status on the Job Management tab")
+    st.caption(f"{settings.airflow_public_url} — status on the Job Management tab")
 
 st.divider()
 
