@@ -1,4 +1,7 @@
-"""Airflow REST request building and response parsing, fully mocked (§12)."""
+"""Airflow REST request building and response parsing, fully mocked (§12).
+
+Targets Airflow 3: `/api/v2` plus a JWT fetched from `/auth/token`.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +11,7 @@ import pytest
 
 from common.airflow_client import (
     MANUAL_UI_LABEL,
+    TOKEN_PATH,
     AirflowApiError,
     AirflowClient,
     build_api_url,
@@ -36,19 +40,35 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, response: FakeResponse) -> None:
+    """Answers the token endpoint and the API with separate canned responses."""
+
+    def __init__(
+        self, response: FakeResponse, token_response: FakeResponse | None = None
+    ) -> None:
         self.response = response
+        self.token_response = token_response or FakeResponse({"access_token": "jwt-1"})
         self.calls: list[dict[str, Any]] = []
-        self.auth: tuple[str, str] | None = None
         self.headers: dict[str, str] = {}
+
+    @property
+    def token_calls(self) -> list[dict[str, Any]]:
+        return [call for call in self.calls if call["url"].endswith(TOKEN_PATH)]
+
+    @property
+    def api_calls(self) -> list[dict[str, Any]]:
+        return [call for call in self.calls if not call["url"].endswith(TOKEN_PATH)]
 
     def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
         self.calls.append({"method": method, "url": url, **kwargs})
+        if url.endswith(TOKEN_PATH):
+            return self.token_response
         return self.response
 
 
-def make_client(response: FakeResponse) -> tuple[AirflowClient, FakeSession]:
-    session = FakeSession(response)
+def make_client(
+    response: FakeResponse, token_response: FakeResponse | None = None
+) -> tuple[AirflowClient, FakeSession]:
+    session = FakeSession(response, token_response)
     client = AirflowClient(
         "http://airflow:8080",
         "airflow",
@@ -63,13 +83,14 @@ def make_client(response: FakeResponse) -> tuple[AirflowClient, FakeSession]:
 def test_build_api_url_joins_segments() -> None:
     assert (
         build_api_url("http://airflow:8080/", "dags", "ingest_connections", "dagRuns")
-        == "http://airflow:8080/api/v1/dags/ingest_connections/dagRuns"
+        == "http://airflow:8080/api/v2/dags/ingest_connections/dagRuns"
     )
 
 
 def test_trigger_payload_tags_the_source() -> None:
     payload = build_trigger_payload(TriggerSource.STREAMLIT)
-    assert payload == {"conf": {"triggered_by": "streamlit"}}
+    # Airflow 3 wants the field present; a triggered ingestion has no logical date.
+    assert payload == {"conf": {"triggered_by": "streamlit"}, "logical_date": None}
 
 
 def test_trigger_payload_carries_extra_conf_and_a_note() -> None:
@@ -140,9 +161,9 @@ def test_trigger_posts_to_the_documented_endpoint() -> None:
     client, session = make_client(FakeResponse({"dag_run_id": "run-1", "state": "queued"}))
     run = client.trigger_dag_run(TriggerSource.STREAMLIT)
 
-    call = session.calls[0]
+    call = session.api_calls[0]
     assert call["method"] == "POST"
-    assert call["url"].endswith("/api/v1/dags/ingest_connections/dagRuns")
+    assert call["url"].endswith("/api/v2/dags/ingest_connections/dagRuns")
     assert call["json"]["conf"]["triggered_by"] == "streamlit"
     assert run.dag_run_id == "run-1"
 
@@ -150,16 +171,16 @@ def test_trigger_posts_to_the_documented_endpoint() -> None:
 def test_list_dag_runs_requests_newest_first() -> None:
     client, session = make_client(FakeResponse({"dag_runs": []}))
     client.list_dag_runs(limit=5)
-    assert session.calls[0]["params"] == {"limit": 5, "order_by": "-start_date"}
+    assert session.api_calls[0]["params"] == {"limit": 5, "order_by": "-start_date"}
 
 
 def test_get_task_log_asks_for_the_full_content() -> None:
     client, session = make_client(FakeResponse({"content": "log body"}))
     assert client.get_task_log("run-1", "ingest_new_objects_to_bronze", 2) == "log body"
-    assert session.calls[0]["url"].endswith(
+    assert session.api_calls[0]["url"].endswith(
         "/dagRuns/run-1/taskInstances/ingest_new_objects_to_bronze/logs/2"
     )
-    assert session.calls[0]["params"] == {"full_content": "true"}
+    assert session.api_calls[0]["params"] == {"full_content": "true"}
 
 
 def test_http_errors_are_raised_with_context() -> None:
@@ -174,3 +195,73 @@ def test_health_reports_unhealthy_metadatabase() -> None:
 
     client, _ = make_client(FakeResponse({"metadatabase": {"status": "healthy"}}))
     assert client.is_healthy() is True
+
+
+# --- JWT authentication (Airflow 3) ---------------------------------------
+def test_every_request_carries_a_bearer_token() -> None:
+    client, session = make_client(FakeResponse({"dag_runs": []}))
+    client.list_dag_runs()
+
+    assert session.token_calls[0]["method"] == "POST"
+    assert session.token_calls[0]["json"] == {"username": "airflow", "password": "secret"}
+    assert session.api_calls[0]["headers"]["Authorization"] == "Bearer jwt-1"
+
+
+def test_the_token_is_fetched_once_and_reused() -> None:
+    client, session = make_client(FakeResponse({"dag_runs": []}))
+    client.list_dag_runs()
+    client.list_dag_runs()
+    assert len(session.token_calls) == 1
+    assert len(session.api_calls) == 2
+
+
+def test_a_rejected_token_is_refreshed_once() -> None:
+    """An expired JWT must not surface to the user as a failure."""
+    client, session = make_client(FakeResponse(None, status_code=401, text="expired"))
+    with pytest.raises(AirflowApiError, match="401"):
+        client.list_dag_runs()
+    # One token up front, one refresh after the 401 — and no infinite loop.
+    assert len(session.token_calls) == 2
+    assert len(session.api_calls) == 2
+
+
+def test_bad_credentials_give_an_actionable_message() -> None:
+    client, _ = make_client(
+        FakeResponse({"dag_runs": []}),
+        token_response=FakeResponse(None, status_code=401, text="Unauthorized"),
+    )
+    with pytest.raises(AirflowApiError, match="AIRFLOW_API_USERNAME"):
+        client.list_dag_runs()
+
+
+def test_health_uses_the_v2_monitor_endpoint() -> None:
+    client, session = make_client(FakeResponse({"metadatabase": {"status": "healthy"}}))
+    assert client.is_healthy() is True
+    assert session.api_calls[0]["url"].endswith("/api/v2/monitor/health")
+
+
+def test_a_cold_api_server_is_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FAB can 500 on its first token request; that must not look like an outage."""
+    import common.airflow_client as module
+
+    monkeypatch.setattr(module, "TOKEN_RETRY_DELAY_SECONDS", 0)
+    attempts: list[int] = []
+
+    class FlakyTokenSession(FakeSession):
+        def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
+            if url.endswith(TOKEN_PATH):
+                attempts.append(1)
+                if len(attempts) == 1:
+                    return FakeResponse(None, status_code=500, text="boom")
+                return FakeResponse({"access_token": "jwt-after-retry"})
+            self.calls.append({"method": method, "url": url, **kwargs})
+            return self.response
+
+    session = FlakyTokenSession(FakeResponse({"dag_runs": []}))
+    client = AirflowClient(
+        "http://airflow:8080", "airflow", "secret",
+        dag_id="ingest_connections", session=session,  # type: ignore[arg-type]
+    )
+    client.list_dag_runs()
+    assert len(attempts) == 2
+    assert session.calls[0]["headers"]["Authorization"] == "Bearer jwt-after-retry"
