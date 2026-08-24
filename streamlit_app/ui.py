@@ -78,7 +78,9 @@ def minio_status() -> tuple[bool, str]:
     except ConnectionLensError as error:
         return False, str(error)
     if client.is_reachable():
-        return True, f"{settings.minio_endpoint} · bucket `{settings.minio_bucket}`"
+        return True, (
+            f"Console {settings.minio_public_url} · bucket `{settings.minio_bucket}`"
+        )
     return False, f"Cannot reach MinIO at {settings.minio_endpoint}."
 
 
