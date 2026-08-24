@@ -1,46 +1,35 @@
 # syntax=docker/dockerfile:1
-ARG AIRFLOW_VERSION=2.10.5
+ARG AIRFLOW_VERSION=3.1.8
 ARG PYTHON_VERSION=3.12
+ARG UV_VERSION=0.10.11
 FROM apache/airflow:${AIRFLOW_VERSION}-python${PYTHON_VERSION}
-
-ARG AIRFLOW_VERSION
-ARG PYTHON_VERSION
 
 USER root
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
+COPY --from=ghcr.io/astral-sh/uv:0.10.11 /uv /uvx /usr/local/bin/
 
 USER airflow
 
-# --- Airflow's own environment: what the DAG's Python tasks import ---------
-# The shared runtime plus Great Expectations, which only the data-quality task
-# needs. Constrained to Airflow's published constraints so nothing here can
-# break the scheduler's dependencies.
-COPY requirements.txt /tmp/requirements/
-RUN pip install --no-cache-dir \
-    -r /tmp/requirements/requirements.txt \
-    "great_expectations~=1.3" \
-    --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${PYTHON_VERSION}.txt"
-
-# DuckDB's storage format is backward-compatible only. The DAG's Python tasks
-# write Bronze and dbt writes Silver/Gold **to the same file**, so both
-# interpreters must run the same DuckDB. Airflow's constraints pin an older
-# release than dbt-duckdb installs, so align them explicitly here.
-ARG DUCKDB_VERSION=">=1.5,<2.0"
-RUN pip install --no-cache-dir --upgrade "duckdb${DUCKDB_VERSION}"
-
-# --- dbt in an isolated virtualenv -----------------------------------------
-# dbt-core pins jinja2/click/protobuf versions that clash with Airflow's, so it
-# gets its own interpreter and is called as a plain CLI from @task.bash.
-COPY requirements-dbt.txt /tmp/requirements/
-RUN python -m venv /home/airflow/dbt-venv \
-    && /home/airflow/dbt-venv/bin/pip install --no-cache-dir --upgrade pip \
-    && /home/airflow/dbt-venv/bin/pip install --no-cache-dir -r /tmp/requirements/requirements-dbt.txt
-
-USER root
-RUN ln -s /home/airflow/dbt-venv/bin/dbt /usr/local/bin/dbt
-USER airflow
+# Everything the DAG imports, plus dbt — one interpreter, one lockfile.
+#
+# Airflow 2 could not host dbt: applying Airflow's constraints file alongside
+# dbt-core ends in ResolutionImpossible, which is why this image used to carry
+# a second virtualenv. uv resolves apache-airflow 3.1.8, dbt and Great
+# Expectations into a single consistent set instead, so `uv.lock` replaces the
+# constraints file and the extra venv is gone.
+#
+# Airflow itself stays out of this install: it comes from the base image and
+# the `airflow` dependency group only exists so the lock resolves against it.
+# --chown: the export below is written by the airflow user, not root.
+COPY --chown=airflow:root pyproject.toml uv.lock /tmp/uv/
+RUN cd /tmp/uv \
+    && uv export --frozen --no-hashes --no-default-groups \
+        --group quality --group dbt \
+        --output-file /tmp/uv/requirements.txt \
+    && uv pip install --python "$(command -v python)" -r /tmp/uv/requirements.txt \
+    && rm -rf /tmp/uv
 
 ENV PYTHONPATH=/opt/connection_lens \
-    PIP_NO_CACHE_DIR=1
+    UV_NO_CACHE=1
