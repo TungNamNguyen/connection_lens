@@ -80,13 +80,24 @@ The Airflow REST client is used by Streamlit *and* the event listener. Keeping
 one implementation in `common/` beats two copies drifting apart in
 `streamlit_app/`.
 
-## 9. dbt runs from its own virtualenv inside the Airflow image
+## 9. One lockfile, one environment per image
 
-dbt-core and Airflow pin conflicting versions of shared libraries. Rather than
-fight the resolver, dbt is installed to `/home/airflow/dbt-venv` and invoked
-as a CLI from `@task.bash`. Both interpreters are pinned to the **same DuckDB
-release**, because DuckDB's storage format is backward-compatible only and
-both processes write to the same file.
+`uv.lock` pins every dependency for every environment; each Docker image
+installs the project dependencies plus only the dependency groups it imports,
+so the Streamlit image carries no dbt and the listener carries no Streamlit.
+
+Under Airflow 2 this was impossible: applying Airflow's constraints file next
+to dbt-core ends in `ResolutionImpossible`, so dbt needed its own virtualenv
+inside the image. Airflow 3.1.8, dbt and Great Expectations resolve into one
+consistent set, so both now share a single interpreter.
+
+The lock still has to stay installable **on top of the Airflow base image**,
+which ships its own provider packages. That is why `constraint-dependencies`
+holds `cryptography` in the range the image was built for: the google and
+snowflake providers load pyOpenSSL, and pyOpenSSL fails to import the moment
+cryptography moves ahead of it. Great Expectations imports the Snowflake
+connector on the way in, so an unconstrained upgrade silently broke the
+data-quality task. One line in `pyproject.toml` keeps the two in step.
 
 ## 10. Failing loudly beats coping quietly
 
@@ -95,18 +106,33 @@ parse, content whose hash disagrees with its key, a changed date format — all
 raise. The one thing that is *not* an error is a duplicate upload, and even
 that is logged explicitly rather than skipped in silence.
 
-## 11. Airflow REST API auth: HTTP basic
+## 11. Airflow REST API auth: JWT
 
-Airflow 2.10's stable API (`/api/v1`) is enabled with
-`airflow.api.auth.backend.basic_auth` alongside the session backend, and both
-callers — the Streamlit Job Management tab and the MinIO event listener —
-authenticate with the same admin credentials from `.env`.
+Airflow 3's stable API is `/api/v2`, and it only accepts JWTs. The FAB auth
+manager supplies the `/auth/token` endpoint; `AirflowClient` exchanges the
+credentials from `.env` for a token once, caches it, and refreshes it
+automatically when the API answers 401 or 403.
 
-Basic auth over localhost is proportionate here: the API is never exposed
-outside the Docker network, this is a single-user tool, and a token backend
-would add a refresh flow with no security benefit at this boundary. The API
-version is a parameter of `AirflowClient`, so moving to Airflow 3's `/api/v2`
-and its JWT flow is a change in one module.
+Two operational details are handled rather than left to bite:
+
+* a freshly started API server can fail its *first* token request while FAB
+  initialises its Flask app, so a 5xx on the token endpoint is retried briefly
+  — a cold start must not look like an outage to the owner;
+* bad credentials (4xx) fail immediately with a message naming
+  `AIRFLOW_API_USERNAME` / `AIRFLOW_API_PASSWORD`, because retrying those
+  helps nobody.
+
+The listener additionally accepts a shared bearer token
+(`MINIO_EVENT_LISTENER_TOKEN`) so that only MinIO can ask it to start a run.
+
+## 12. The UI links to the address a browser can open
+
+Inside Docker the app reaches Airflow at `http://airflow-apiserver:8080` and
+MinIO at `minio:9000`. Neither name resolves in the viewer's browser, so every
+clickable link and address shown in the UI comes from `AIRFLOW_PUBLIC_URL` /
+`MINIO_PUBLIC_URL` instead — the API base URL is for the app, the public URL is
+for the human. A page test asserts the Job Management tab never renders the
+internal hostname.
 
 The listener additionally accepts a shared bearer token
 (`MINIO_EVENT_LISTENER_TOKEN`) so that only MinIO can ask it to start a run.
