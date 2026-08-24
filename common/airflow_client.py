@@ -1,5 +1,9 @@
 """Airflow REST API wrapper (§8, §9).
 
+Targets Airflow 3's stable API: `/api/v2` with JWT bearer tokens. Airflow 2's
+`/api/v1` plus HTTP basic auth is gone — a token is fetched once from
+`/auth/token` and refreshed automatically when the API rejects it.
+
 Shared by the Streamlit Job Management tab (trigger mode 3) and by the MinIO
 event listener (trigger mode 2) — both call exactly the same endpoint with a
 different ``triggered_by`` tag, because the DAG itself must never branch on
@@ -12,6 +16,7 @@ mocked payloads (§12).
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 from typing import Any
 
@@ -23,7 +28,16 @@ from common.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_API_VERSION = "v1"
+DEFAULT_API_VERSION = "v2"
+
+#: Where the FAB auth manager issues JWTs (Airflow 3).
+TOKEN_PATH = "/auth/token"
+
+#: The FAB auth manager builds its Flask app lazily, so the very first token
+#: request after the API server boots can return a 500. Retry briefly rather
+#: than telling the owner Airflow is down.
+TOKEN_RETRY_ATTEMPTS = 3
+TOKEN_RETRY_DELAY_SECONDS = 1.5
 
 #: Shown when a run carries no ``triggered_by`` — i.e. someone used the
 #: Airflow UI's own "Trigger DAG" button (trigger mode 1, §8).
@@ -53,12 +67,16 @@ def build_trigger_payload(
 
     The ``triggered_by`` tag is what lets the Job Management tab attribute a
     run to a source; Airflow's own metadata cannot express it (§5).
+
+    ``logical_date`` is sent explicitly as null: Airflow 3 expects the field to
+    be present, and a triggered ingestion has no logical date — it processes
+    whatever is in the landing zone right now, not a time slice.
     """
     source = triggered_by.value if isinstance(triggered_by, TriggerSource) else str(triggered_by)
     conf: dict[str, Any] = {"triggered_by": source}
     if conf_extra:
         conf.update(conf_extra)
-    payload: dict[str, Any] = {"conf": conf}
+    payload: dict[str, Any] = {"conf": conf, "logical_date": None}
     if note:
         payload["note"] = note
     return payload
@@ -147,8 +165,10 @@ class AirflowClient:
         self.dag_id = dag_id
         self.timeout = timeout
         self.api_version = api_version
+        self._username = username
+        self._password = password
+        self._token: str | None = None
         self._session = session or requests.Session()
-        self._session.auth = (username, password)
         self._session.headers.update({"Accept": "application/json"})
 
     @classmethod
@@ -165,11 +185,74 @@ class AirflowClient:
     def _url(self, *parts: str) -> str:
         return build_api_url(self.base_url, *parts, api_version=self.api_version)
 
-    def _request(self, method: str, url: str, **kwargs: Any) -> Any:
+    # --- authentication ----------------------------------------------------
+    def _fetch_token(self) -> str:
+        """Exchange the configured credentials for a JWT (Airflow 3).
+
+        Retries a server-side error a couple of times: a freshly started API
+        server can fail its first token request while FAB initialises. Bad
+        credentials (4xx) fail immediately — retrying those helps nobody.
+        """
+        url = f"{self.base_url.rstrip('/')}{TOKEN_PATH}"
+        response = None
+        for attempt in range(1, TOKEN_RETRY_ATTEMPTS + 1):
+            try:
+                response = self._session.request(
+                    "POST",
+                    url,
+                    json={"username": self._username, "password": self._password},
+                    timeout=self.timeout,
+                )
+            except requests.RequestException as error:
+                raise AirflowApiError(f"Could not reach Airflow at {url}: {error}") from error
+            if response.status_code < 500:
+                break
+            logger.warning(
+                "Airflow token endpoint returned HTTP %s (attempt %d/%d) — "
+                "the API server may still be starting.",
+                response.status_code,
+                attempt,
+                TOKEN_RETRY_ATTEMPTS,
+            )
+            if attempt < TOKEN_RETRY_ATTEMPTS:
+                time.sleep(TOKEN_RETRY_DELAY_SECONDS)
+
+        assert response is not None
+        if response.status_code >= 400:
+            raise AirflowApiError(
+                "Could not obtain an Airflow API token (HTTP "
+                f"{response.status_code}). Check AIRFLOW_API_USERNAME and "
+                f"AIRFLOW_API_PASSWORD: {response.text[:200]}"
+            )
+        payload = response.json()
+        token = payload.get("access_token") if isinstance(payload, dict) else None
+        if not token:
+            raise AirflowApiError(f"Airflow returned no access_token: {payload!r}")
+        return str(token)
+
+    def _auth_header(self) -> dict[str, str]:
+        if self._token is None:
+            self._token = self._fetch_token()
+        return {"Authorization": f"Bearer {self._token}"}
+
+    def _request(self, method: str, url: str, *, _retry: bool = True, **kwargs: Any) -> Any:
+        caller_headers = kwargs.pop("headers", {})
         try:
-            response = self._session.request(method, url, timeout=self.timeout, **kwargs)
+            response = self._session.request(
+                method,
+                url,
+                timeout=self.timeout,
+                headers={**caller_headers, **self._auth_header()},
+                **kwargs,
+            )
         except requests.RequestException as error:
             raise AirflowApiError(f"Could not reach Airflow at {url}: {error}") from error
+        if response.status_code in (401, 403) and _retry:
+            # The token expired or was rejected — get a fresh one and retry once.
+            self._token = None
+            return self._request(
+                method, url, _retry=False, headers=caller_headers, **kwargs
+            )
         if response.status_code >= 400:
             raise AirflowApiError(
                 f"Airflow API {method} {url} failed with HTTP "
@@ -186,7 +269,7 @@ class AirflowClient:
     def is_healthy(self) -> bool:
         """Return whether the Airflow API answers and reports a healthy scheduler."""
         try:
-            payload = self._request("GET", self._url("health"))
+            payload = self._request("GET", self._url("monitor", "health"))
         except AirflowApiError as error:
             logger.warning("Airflow health check failed: %s", error)
             return False
