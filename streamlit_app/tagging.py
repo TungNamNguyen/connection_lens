@@ -18,12 +18,16 @@ RECRUITER_TALENT: Final = "recruiter_talent"
 LEADERSHIP: Final = "leadership"
 EXECUTIVE: Final = "executive"
 TARGET_PEER: Final = "target_peer"
+ENGINEERING: Final = "engineering"
+EARLY_CAREER: Final = "early_career"
 
 ALL_TAGS: Final[tuple[str, ...]] = (
     RECRUITER_TALENT,
     LEADERSHIP,
     EXECUTIVE,
     TARGET_PEER,
+    ENGINEERING,
+    EARLY_CAREER,
 )
 
 TAG_DESCRIPTIONS: Final[dict[str, str]] = {
@@ -74,6 +78,39 @@ TAG_KEYWORDS: Final[dict[str, tuple[str, ...]]] = {
         "data scientist",
         "data engineer",
         "data engineering",
+    ),
+    # The largest group the first four tags missed: technical people at the
+    # companies worth aiming at, who can refer inside their own team.
+    ENGINEERING: (
+        "engineer",
+        "engineering",
+        "developer",
+        "development",
+        "software",
+        "programmer",
+        "architect",
+        "devops",
+        "sre",
+        "backend",
+        "back-end",
+        "frontend",
+        "front-end",
+        "fullstack",
+        "full-stack",
+        "qa",
+        "tester",
+    ),
+    # Tagged so they can be filtered *out*: a referral from someone still
+    # interning rarely carries weight, however friendly they are.
+    EARLY_CAREER: (
+        "intern",
+        "internship",
+        "student",
+        "fresher",
+        "trainee",
+        "graduate",
+        "apprentice",
+        "junior",
     ),
 }
 
