@@ -18,6 +18,7 @@ import streamlit as st  # noqa: E402
 from common.csv_schema import KNOWN_COLUMNS, REQUIRED_COLUMNS  # noqa: E402
 from common.errors import ConnectionLensError, CsvSchemaError  # noqa: E402
 from streamlit_app import db  # noqa: E402
+from streamlit_app.auth import require_login  # noqa: E402
 from streamlit_app.ui import (  # noqa: E402
     configure_page,
     format_timestamp,
@@ -28,17 +29,22 @@ from streamlit_app.ui import (  # noqa: E402
 from streamlit_app.upload_service import perform_upload, prepare_upload  # noqa: E402
 
 configure_page("Upload")
+require_login()
 st.title("📤 Upload a LinkedIn export")
 st.caption(
     "Get your file from LinkedIn → Settings → **Get a copy of your data** → "
     "*Connections*. Nothing here is scraped, and nothing leaves this machine."
 )
 
-reachable, detail = minio_status()
-if not reachable:
-    st.error(f"Landing zone unavailable — {detail}", icon="🚫")
+landing_zone = minio_status()
+if not landing_zone.reachable:
+    st.error(f"Landing zone unavailable — {landing_zone.detail}", icon="🚫")
     st.stop()
-st.caption(f"Landing zone: {detail}")
+if landing_zone.bucket_exists:
+    st.caption(f"Landing zone: {landing_zone.detail}")
+else:
+    # Uploading still works: the client creates the bucket on first write.
+    st.warning(landing_zone.detail, icon="🪣")
 
 uploaded = st.file_uploader(
     "Connections.csv",
