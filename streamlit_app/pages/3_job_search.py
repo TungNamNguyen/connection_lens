@@ -20,7 +20,11 @@ import streamlit as st  # noqa: E402
 
 from streamlit_app import db  # noqa: E402
 from streamlit_app.auth import require_login  # noqa: E402
-from streamlit_app.scoring import DEFAULT_WEIGHTS, score_connections  # noqa: E402
+from streamlit_app.scoring import (  # noqa: E402
+    DEFAULT_WEIGHTS,
+    company_match,
+    score_connections,
+)
 from streamlit_app.tagging import ALL_TAGS, format_tags, tag_connection  # noqa: E402
 from streamlit_app.ui import (  # noqa: E402
     configure_page,
@@ -123,8 +127,12 @@ summary_columns[1].metric("Of total", f"{len(connections):,}")
 strong = int((scored["score"] >= STRONG_SCORE_THRESHOLD).sum()) if len(scored) else 0
 summary_columns[2].metric(f"Scoring {STRONG_SCORE_THRESHOLD}+", f"{strong:,}")
 if target_company.strip():
+    # Count people actually employed there — a high score alone does not mean
+    # someone works at the target, now that the score stands on its own.
     at_target = int(
-        (scored["score"] >= DEFAULT_WEIGHTS.target_company_exact).sum()
+        scored["company"]
+        .map(lambda name: company_match(name, target_company) == "exact")
+        .sum()
     )
     summary_columns[3].metric(f"At {target_company.strip()}", f"{at_target:,}")
 else:
