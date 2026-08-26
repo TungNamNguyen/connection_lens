@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 import urllib.parse
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -22,6 +23,27 @@ def configure_page(subtitle: str, *, layout: str = "wide") -> None:
     st.set_page_config(
         page_title=f"{APP_TITLE} — {subtitle}", page_icon=PAGE_ICON, layout=layout
     )
+
+
+#: Vietnamese "đ" is a letter in its own right, not an accented "d", so NFD
+#: leaves it alone — it has to be mapped by hand.
+_FOLD_EXCEPTIONS = str.maketrans({"đ": "d", "Đ": "D", "ð": "d"})
+
+
+def fold_accents(value: object) -> str:
+    """Lower-case a string and strip diacritics, for accent-blind search.
+
+    Half this network has Vietnamese names, so typing "nguyen" has to find
+    "Nguyễn" and "ngan hang" has to find "Ngân hàng".
+    """
+    if value is None:
+        return ""
+    text = str(value).translate(_FOLD_EXCEPTIONS)
+    decomposed = unicodedata.normalize("NFD", text)
+    without_marks = "".join(
+        character for character in decomposed if not unicodedata.combining(character)
+    )
+    return without_marks.casefold()
 
 
 def display_profile_url(connection_id: str | None) -> str:
