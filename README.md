@@ -140,6 +140,7 @@ connection_lens/
 | --- | --- |
 | First upload | Lands in MinIO, ingested into Bronze, everyone gets a `dim_connection` row. |
 | The exact same file again | Uploaded to MinIO again (the audit trail is deliberate), **skipped** in Bronze with a loud log line. |
+| You delete an object from the Upload tab | Every version of it goes from MinIO. Bronze is untouched, so anything already ingested stays in the warehouse. The only way anything ever leaves the landing zone. |
 | Different content, same day | Both ingested — the calendar day is irrelevant. |
 | Someone changed employer | Their old SCD2 row is closed, a new current row opens. |
 | Someone disappeared | Their row is invalidated (`dbt_valid_to` set, no longer current). **No reason is inferred or stored** — LinkedIn's export gives none. |
