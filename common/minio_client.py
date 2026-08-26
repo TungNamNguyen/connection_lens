@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from minio import Minio
+from minio.deleteobjects import DeleteObject
 from minio.error import S3Error
 from urllib3.exceptions import HTTPError
 
@@ -179,6 +180,55 @@ class LandingZoneClient:
                 )
             )
         return sorted(objects, key=lambda obj: (obj.snapshot_ts, obj.key))
+
+    # --- delete ------------------------------------------------------------
+    def delete_object(self, key: str) -> int:
+        """Permanently remove one landing-zone object and return how many
+        versions went with it.
+
+        Two guards, because this is the only destructive operation the app
+        exposes:
+
+        * the key must sit under the configured raw prefix, so the UI can
+          never reach the rest of the bucket;
+        * every version is removed rather than a delete marker being stacked
+          on top — the bucket is versioned, so "deleted" has to mean deleted.
+
+        Bronze is untouched. An export already ingested stays in the
+        warehouse; only the landing-zone copy goes.
+        """
+        prefix = f"{self.raw_prefix}/"
+        if not key.startswith(prefix):
+            raise LandingZoneError(
+                f"Refusing to delete {key!r}: only objects under {prefix!r} "
+                "can be removed from here."
+            )
+
+        with _landing_zone_errors(f"delete {key!r}"):
+            versions = [
+                DeleteObject(item.object_name, item.version_id)
+                for item in self._client.list_objects(
+                    self.bucket, prefix=key, include_version=True
+                )
+                if item.object_name == key
+            ]
+            if not versions:
+                raise LandingZoneError(
+                    f"No object named {key!r} in the landing zone."
+                )
+            failures = [
+                f"{error.name}: {error.message}"
+                for error in self._client.remove_objects(self.bucket, versions)
+            ]
+
+        if failures:
+            raise LandingZoneError(
+                "MinIO refused to delete: " + "; ".join(failures[:3])
+            )
+        logger.warning(
+            "DELETED %d version(s) of %s from the landing zone.", len(versions), key
+        )
+        return len(versions)
 
     def get_object_bytes(self, key: str) -> bytes:
         """Download an object's full content."""
