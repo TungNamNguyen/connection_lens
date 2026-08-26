@@ -229,7 +229,11 @@ services:
       dockerfile: docker/streamlit/Dockerfile
     image: connection-lens/streamlit:1.0.0
     container_name: connection-lens-streamlit
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      # The login guarding the tabs (§9). Only this service needs it.
+      STREAMLIT_AUTH_USERNAME: ${STREAMLIT_AUTH_USERNAME:?set STREAMLIT_AUTH_USERNAME in .env}
+      STREAMLIT_AUTH_PASSWORD: ${STREAMLIT_AUTH_PASSWORD:?set STREAMLIT_AUTH_PASSWORD in .env}
     # The warehouse is mounted read-only: Streamlit must never be able to
     # write to Bronze/Gold, whatever the code does (§10, §17).
     volumes:
