@@ -1,6 +1,7 @@
 """Job Search tab — the warm-intro workspace (§9).
 
-Reads the Gold tables directly and applies tagging and scoring in Python, so
+Ranks every current connection by **how strong a referral they could give**,
+reading the Gold tables directly and applying tagging and scoring in Python so
 filtering stays interactive and the taxonomy/weights live in one testable
 place instead of being frozen into SQL.
 """
@@ -24,21 +25,19 @@ from streamlit_app.tagging import ALL_TAGS, format_tags, tag_connection  # noqa:
 from streamlit_app.ui import (  # noqa: E402
     configure_page,
     display_profile_url,
+    format_date,
     format_timestamp,
     render_sidebar_footer,
     require_warehouse,
 )
 
-RECENCY_OPTIONS = {
-    "Any": None,
-    "Last 30 days": 30,
-    "Last 90 days": 90,
-    "Last 180 days": 180,
-}
-
-SORT_SCORE = "Score (high → low)"
-SORT_RECENCY = "Days since change (recent first)"
+SORT_SCORE = "Referral strength (high → low)"
 SORT_NAME = "Name (A → Z)"
+SORT_COMPANY = "Company (A → Z)"
+
+#: Above this, a connection is worth putting on a shortlist rather than
+#: scrolling past. Half the scale, i.e. a strong role plus one other signal.
+STRONG_SCORE_THRESHOLD = 50
 
 configure_page("Job Search")
 require_login()
@@ -85,12 +84,8 @@ with filter_columns[2]:
     )
 
 with filter_columns[3]:
-    recency_label = st.selectbox("Changed within", list(RECENCY_OPTIONS), index=0)
-    default_sort = SORT_SCORE if target_company.strip() else SORT_RECENCY
     sort_choice = st.selectbox(
-        "Sort by",
-        [SORT_SCORE, SORT_RECENCY, SORT_NAME],
-        index=[SORT_SCORE, SORT_RECENCY, SORT_NAME].index(default_sort),
+        "Sort by", [SORT_SCORE, SORT_NAME, SORT_COMPANY], index=0
     )
 
 filtered = connections
@@ -110,18 +105,14 @@ if company_search.strip():
         filtered["company"].fillna("").str.lower().str.contains(needle, regex=False)
     ]
 
-recency_days = RECENCY_OPTIONS[recency_label]
-if recency_days is not None:
-    filtered = filtered[filtered["days_since_change"] <= recency_days]
-
 scored = score_connections(filtered, target_company)
 
 if sort_choice == SORT_SCORE:
     scored = scored.sort_values(
-        ["score", "days_since_change"], ascending=[False, True]
+        ["score", "full_name"], ascending=[False, True], na_position="last"
     )
-elif sort_choice == SORT_RECENCY:
-    scored = scored.sort_values("days_since_change", ascending=True)
+elif sort_choice == SORT_COMPANY:
+    scored = scored.sort_values("company", ascending=True, na_position="last")
 else:
     scored = scored.sort_values("full_name", ascending=True, na_position="last")
 
@@ -129,19 +120,16 @@ else:
 summary_columns = st.columns(4)
 summary_columns[0].metric("Matching connections", f"{len(scored):,}")
 summary_columns[1].metric("Of total", f"{len(connections):,}")
+strong = int((scored["score"] >= STRONG_SCORE_THRESHOLD).sum()) if len(scored) else 0
+summary_columns[2].metric(f"Scoring {STRONG_SCORE_THRESHOLD}+", f"{strong:,}")
 if target_company.strip():
-    at_target = int((scored["score"] >= DEFAULT_WEIGHTS.company_exact_match).sum())
-    summary_columns[2].metric(f"At {target_company.strip()}", f"{at_target:,}")
+    at_target = int(
+        (scored["score"] >= DEFAULT_WEIGHTS.target_company_exact).sum()
+    )
+    summary_columns[3].metric(f"At {target_company.strip()}", f"{at_target:,}")
+else:
     summary_columns[3].metric(
         "Top score", f"{int(scored['score'].max()) if len(scored) else 0}"
-    )
-else:
-    summary_columns[2].metric(
-        "Changed in 90 days",
-        f"{int((scored['days_since_change'] <= 90).sum()):,}",
-    )
-    summary_columns[3].caption(
-        "Enter a **target company** to score these connections as warm-intro routes."
     )
 
 # --- Table -----------------------------------------------------------------
@@ -151,15 +139,12 @@ table = pd.DataFrame(
         "Company": scored["company"].fillna("—"),
         "Position": scored["position"].fillna("—"),
         "Tags": scored["tags"].map(format_tags),
-        "Last changed": scored["last_changed_at"].map(format_timestamp),
-        "Days since change": scored["days_since_change"],
+        "Connected": scored["connected_on"].map(format_date),
         "Score": scored["score"],
         "Why": scored["score_reason"],
         "Profile": scored["profile_url"],
     }
 )
-if not target_company.strip():
-    table = table.drop(columns=["Score", "Why"])
 
 st.dataframe(
     table,
@@ -167,26 +152,21 @@ st.dataframe(
     hide_index=True,
     column_config={
         "Profile": st.column_config.LinkColumn("Profile", display_text="Open ↗"),
-        "Days since change": st.column_config.NumberColumn(
-            "Days since change", format="%d"
-        ),
         "Score": st.column_config.ProgressColumn(
-            "Score",
+            "Referral strength",
+            help="How strong a referral this person could give — see the "
+            "breakdown below the table.",
             min_value=0,
-            max_value=int(
-                DEFAULT_WEIGHTS.company_exact_match
-                + DEFAULT_WEIGHTS.recent_change
-                + DEFAULT_WEIGHTS.seniority
-            ),
+            max_value=DEFAULT_WEIGHTS.maximum,
             format="%d",
         ),
     },
 )
 
 st.caption(
-    "**Last changed** is when this version of the connection first appeared in "
-    "the SCD2 history — i.e. when an export first showed the new company or "
-    "title, not necessarily when the person actually moved."
+    "**Referral strength** ranks who could realistically get your CV in front "
+    "of someone. It scores the person, so it is useful before you have a "
+    "target company in mind — naming one adds the largest single term."
 )
 
 st.download_button(
@@ -245,19 +225,36 @@ with signal_columns[1]:
             "no signal for *why* someone disappeared, so none is guessed."
         )
 
-with st.expander("How the score works"):
+with st.expander("How referral strength is scored"):
     st.markdown(
         f"""
-| Component | Weight | When it applies |
-| --- | --- | --- |
-| Company match (exact) | +{DEFAULT_WEIGHTS.company_exact_match} | Employer matches the target after normalising legal forms and punctuation |
-| Company match (partial) | +{DEFAULT_WEIGHTS.company_partial_match} | Names overlap — "Example" vs "Example Corporation" |
-| Recent change | +{DEFAULT_WEIGHTS.recent_change} | Company/title changed within {DEFAULT_WEIGHTS.recent_change_window_days} days |
-| Seniority | +{DEFAULT_WEIGHTS.seniority} | Leadership/executive tag, or a senior/staff title |
+The score answers one question: **how strong a referral could this person
+give?** It scores the person, so it is meaningful before you name a target —
+naming one just adds the largest single term.
 
-The weights are a starting point, not a finished formula — they live in one
-dataclass in `streamlit_app/scoring.py` and every score carries the reasons
-that produced it in the **Why** column.
+| Signal | Points | Why it counts |
+| --- | --- | --- |
+| Works at the target company | +{DEFAULT_WEIGHTS.target_company_exact} | Only someone inside can refer you in |
+| Company related to the target | +{DEFAULT_WEIGHTS.target_company_partial} | Same group or a name variant |
+| Recruiter / talent | +{DEFAULT_WEIGHTS.role_recruiter} | Moving CVs is their job |
+| Executive | +{DEFAULT_WEIGHTS.role_executive} | Senior enough to create a role |
+| Leadership | +{DEFAULT_WEIGHTS.role_leadership} | Usually holds hiring authority |
+| Peer in your field | +{DEFAULT_WEIGHTS.role_peer} | Can vouch for your work credibly |
+| A second role tag | +{DEFAULT_WEIGHTS.additional_role_tag} | "Director of Analytics" beats "Director" |
+| Seniority in the title | +{DEFAULT_WEIGHTS.seniority} | A senior voice carries further |
+| Connected within {DEFAULT_WEIGHTS.recent_connection_months} months | +{DEFAULT_WEIGHTS.recent_connection} | They are more likely to remember you |
+| Email in the export | +{DEFAULT_WEIGHTS.reachable_by_email} | Reachable without InMail |
+
+Only the strongest role tag scores; a second one adds a little rather than
+doubling. Maximum **{DEFAULT_WEIGHTS.maximum}**.
+
+**Not scored: how recently they changed job.** That signal needs several
+ingested exports before it means anything, and until then it fires for
+everyone equally — which ranks nothing. Recent moves are shown as their own
+panel above instead.
+
+The weights live in one dataclass in `streamlit_app/scoring.py`, and the
+**Why** column always shows which of them fired.
         """
     )
 
