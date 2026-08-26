@@ -24,5 +24,14 @@ class IngestionError(ConnectionLensError):
     """Bronze ingestion could not complete."""
 
 
+class LandingZoneError(ConnectionLensError):
+    """MinIO could not be reached, or refused an operation.
+
+    Exists so the SDK's own exception types (`minio.error.S3Error`,
+    `urllib3.exceptions.MaxRetryError`) never reach the Streamlit pages, which
+    only know how to handle a :class:`ConnectionLensError`.
+    """
+
+
 class WarehouseNotReadyError(ConnectionLensError):
     """The DuckDB warehouse file does not exist yet (no ingestion has run)."""
