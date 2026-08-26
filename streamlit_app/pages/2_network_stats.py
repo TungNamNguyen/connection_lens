@@ -14,13 +14,35 @@ import streamlit as st  # noqa: E402
 
 from streamlit_app import charts, db  # noqa: E402
 from streamlit_app.auth import require_login  # noqa: E402
-from streamlit_app.tagging import ALL_TAGS, TAG_DESCRIPTIONS, tag_connection  # noqa: E402
+from streamlit_app.scoring import (  # noqa: E402
+    DEFAULT_WEIGHTS,
+    has_seniority_signal,
+    score_connections,
+)
+from streamlit_app.tagging import (  # noqa: E402
+    ALL_TAGS,
+    EARLY_CAREER,
+    TAG_DESCRIPTIONS,
+    tag_connection,
+)
 from streamlit_app.ui import (  # noqa: E402
     configure_page,
     format_timestamp,
     render_sidebar_footer,
     require_warehouse,
 )
+
+#: Score bands for the referral-reach distribution, weakest first.
+SCORE_BANDS: list[tuple[str, int, int]] = [
+    ("0 — no signal", 0, 0),
+    ("1–24", 1, 24),
+    ("25–49", 25, 49),
+    ("50–74", 50, 74),
+    ("75+", 75, 1_000),
+]
+
+#: A company is a "stronghold" once this many connections work there.
+STRONGHOLD_MINIMUM = 3
 
 configure_page("Network Stats")
 require_login()
@@ -179,6 +201,142 @@ else:
     with tag_legend_column:
         for tag, description in TAG_DESCRIPTIONS.items():
             st.markdown(f"**`{tag}`** — {description}")
+
+st.divider()
+
+# --- Referral reach --------------------------------------------------------
+st.subheader("Referral reach")
+st.caption(
+    "The same score the Job Search tab ranks by: how strongly each connection "
+    "could refer you into the company they work at today."
+)
+
+scored = score_connections(connections)
+reach_columns = st.columns(4)
+reach_columns[0].metric("Median score", f"{int(scored['score'].median())}")
+reach_columns[1].metric(
+    "Scoring 75+", f"{int((scored['score'] >= 75).sum()):,}"
+)
+reach_columns[2].metric(
+    "Scoring 50+", f"{int((scored['score'] >= 50).sum()):,}"
+)
+reach_columns[3].metric(
+    "Scoring 0", f"{int((scored['score'] == 0).sum()):,}"
+)
+
+band_frame = pd.DataFrame(
+    [
+        {
+            "band": label,
+            "connections": int(
+                scored["score"].between(low, high).sum()
+            ),
+        }
+        for label, low, high in SCORE_BANDS
+    ]
+)
+band_column, stronghold_column = st.columns([1, 1])
+with band_column:
+    st.altair_chart(
+        charts.ranked_bar_chart(
+            band_frame,
+            palette,
+            label_column="band",
+            value_column="connections",
+            label_title="Referral strength",
+            value_title="Connections",
+            height=220,
+            sort_by_value=False,
+        ),
+        use_container_width=True,
+        theme=None,
+    )
+    st.caption(
+        f"Maximum possible score is {DEFAULT_WEIGHTS.maximum}. Scoring 0 "
+        "usually means an untagged title and an old connection, not that the "
+        "person is useless — only a missing employer rules a referral out."
+    )
+
+with stronghold_column:
+    st.markdown(f"**Strongholds** — {STRONGHOLD_MINIMUM}+ connections at one company")
+    strongholds = (
+        scored[scored["company"].notna()]
+        .groupby("company")
+        .agg(
+            connections=("connection_id", "count"),
+            best_score=("score", "max"),
+            median_score=("score", "median"),
+        )
+        .query(f"connections >= {STRONGHOLD_MINIMUM}")
+        .sort_values(["best_score", "connections"], ascending=False)
+        .head(12)
+        .reset_index()
+    )
+    if strongholds.empty:
+        st.caption(
+            f"No company has {STRONGHOLD_MINIMUM} or more of your connections yet."
+        )
+    else:
+        st.dataframe(
+            pd.DataFrame(
+                {
+                    "Company": strongholds["company"],
+                    "Connections": strongholds["connections"],
+                    "Best score": strongholds["best_score"],
+                    "Median": strongholds["median_score"].astype(int),
+                }
+            ),
+            width="stretch",
+            hide_index=True,
+        )
+        st.caption(
+            "Where your network is deep enough that one introduction can be "
+            "cross-checked with someone else."
+        )
+
+st.divider()
+
+# --- Career stage ----------------------------------------------------------
+st.subheader("Career stage and reachability")
+stage_columns = st.columns(4)
+senior_count = int(connections["position"].map(has_seniority_signal).sum())
+early_count = int(
+    connections["position"].map(lambda value: EARLY_CAREER in tag_connection(value)).sum()
+)
+with_email = int(connections["email_address"].notna().sum())
+no_company = int(connections["company"].isna().sum())
+stage_columns[0].metric(
+    "Senior titles", f"{senior_count:,}", f"{100 * senior_count / len(connections):.0f}%"
+)
+stage_columns[1].metric(
+    "Early career", f"{early_count:,}", f"{100 * early_count / len(connections):.0f}%"
+)
+stage_columns[2].metric(
+    "Reachable by email", f"{with_email:,}", f"{100 * with_email / len(connections):.0f}%"
+)
+stage_columns[3].metric(
+    "No employer listed", f"{no_company:,}", f"{100 * no_company / len(connections):.0f}%"
+)
+
+st.divider()
+
+# --- How the network was built --------------------------------------------
+st.subheader("How the network was built")
+st.caption(
+    "Counted from each connection's own date, so this works from the very "
+    "first export — unlike the growth chart above, which compares snapshots."
+)
+if monthly.empty:
+    st.caption("No connection dates available yet.")
+else:
+    cumulative = monthly.sort_values("year_month").assign(
+        cumulative_connections=lambda frame: frame["connection_count"].cumsum()
+    )
+    st.altair_chart(
+        charts.cumulative_connections_chart(cumulative, palette),
+        use_container_width=True,
+        theme=None,
+    )
 
 st.divider()
 
