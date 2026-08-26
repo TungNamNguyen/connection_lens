@@ -23,7 +23,7 @@ import secrets
 import streamlit as st
 
 from common.settings import Settings, get_settings
-from streamlit_app.ui import APP_TITLE, PRIVACY_NOTE
+from streamlit_app.ui import APP_TITLE
 
 #: Set to the signed-in username. Streamlit keeps session state server-side
 #: and per browser session, so nothing authenticating lives in the client.
@@ -119,8 +119,6 @@ def _render_login_form(settings: Settings) -> None:
             else:
                 # One message for both halves — never reveal which was wrong.
                 st.error("Wrong username or password.", icon="🚫")
-
-        st.caption(PRIVACY_NOTE)
 
 
 def _render_account_controls() -> None:
