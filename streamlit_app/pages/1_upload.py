@@ -150,6 +150,52 @@ else:
             "trigger it from **Job Management**."
         )
 
+    with st.expander("Delete an object from the landing zone"):
+        st.caption(
+            "The landing zone is normally kept as a complete upload audit "
+            "trail, so deleting is deliberate and permanent: every version of "
+            "the object goes. Bronze is never touched — an export that has "
+            "already been ingested stays in the warehouse either way."
+        )
+        labels = {
+            f"{obj.key.rsplit('/', 1)[-1]}  ·  {format_timestamp(obj.snapshot_ts)}"
+            f"  ·  {'in Bronze' if obj.hash8 in short_ingested else 'never ingested'}": obj
+            for obj in reversed(objects)
+        }
+        chosen_label = st.selectbox("Object", list(labels), key="delete_target")
+        chosen = labels[chosen_label]
+        already_ingested = chosen.hash8 in short_ingested
+
+        if already_ingested:
+            st.info(
+                "Its rows are already in Bronze. Deleting removes only the "
+                "landing-zone copy — the warehouse keeps the data, and the "
+                "ingestion DAG will not re-read this file.",
+                icon="✅",
+            )
+        else:
+            st.warning(
+                "**This object has never been ingested.** Deleting it loses "
+                "that export permanently — there is no copy anywhere else.",
+                icon="⚠️",
+            )
+
+        st.code(chosen.key, language="text")
+        confirmed = st.checkbox(
+            "I understand this cannot be undone", key="delete_confirmed"
+        )
+        if st.button("Delete permanently", type="primary", disabled=not confirmed):
+            try:
+                removed = landing_zone_client().delete_object(chosen.key)
+            except ConnectionLensError as error:
+                st.error(f"Delete failed: {error}", icon="🚫")
+            else:
+                st.success(
+                    f"Deleted {chosen.key} ({removed} version(s)).", icon="🗑️"
+                )
+                db.clear_caches()
+                st.rerun()
+
 st.subheader("Ingested snapshots (Bronze)")
 ingestion_log = db.load_ingestion_log()
 if ingestion_log.empty:
