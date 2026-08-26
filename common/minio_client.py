@@ -14,12 +14,16 @@ from __future__ import annotations
 
 import io
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 
 from minio import Minio
 from minio.error import S3Error
+from urllib3.exceptions import HTTPError
 
-from common.errors import ObjectKeyError
+from common.errors import LandingZoneError, ObjectKeyError
 from common.models import LandingObject
 from common.naming import build_object_key, parse_object_key, utcnow
 from common.settings import Settings, get_settings
@@ -27,6 +31,39 @@ from common.settings import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 _CSV_CONTENT_TYPE = "text/csv"
+
+#: What the MinIO SDK raises when the server cannot be reached at all. Note
+#: that `urllib3.exceptions.MaxRetryError` is neither an `S3Error` nor an
+#: `OSError`, so it has to be named explicitly.
+_TRANSPORT_ERRORS = (HTTPError, OSError)
+
+
+@dataclass(frozen=True)
+class LandingZoneStatus:
+    """Whether the landing zone is usable, and why not when it is not."""
+
+    reachable: bool
+    bucket_exists: bool
+    detail: str
+
+    @property
+    def is_ready(self) -> bool:
+        return self.reachable and self.bucket_exists
+
+
+@contextmanager
+def _landing_zone_errors(action: str) -> Iterator[None]:
+    """Translate MinIO SDK failures into :class:`LandingZoneError`."""
+    try:
+        yield
+    except S3Error as error:
+        raise LandingZoneError(
+            f"MinIO could not {action}: {error.code} — {error.message}"
+        ) from error
+    except _TRANSPORT_ERRORS as error:
+        raise LandingZoneError(
+            f"Could not reach MinIO while trying to {action}: {error}"
+        ) from error
 
 
 class LandingZoneClient:
@@ -51,18 +88,42 @@ class LandingZoneClient:
     # --- bucket ------------------------------------------------------------
     def ensure_bucket(self) -> None:
         """Create the bucket when it does not exist yet."""
-        if not self._client.bucket_exists(self.bucket):
-            logger.info("Creating MinIO bucket %r", self.bucket)
-            self._client.make_bucket(self.bucket)
+        with _landing_zone_errors(f"create bucket {self.bucket!r}"):
+            if not self._client.bucket_exists(self.bucket):
+                logger.info("Creating MinIO bucket %r", self.bucket)
+                self._client.make_bucket(self.bucket)
+
+    def bucket_exists(self) -> bool:
+        """Return whether the configured bucket exists."""
+        with _landing_zone_errors(f"check bucket {self.bucket!r}"):
+            return bool(self._client.bucket_exists(self.bucket))
+
+    def check_status(self) -> LandingZoneStatus:
+        """Describe the landing zone for the app's status badges.
+
+        Reachability and bucket existence are separate answers: a running
+        MinIO with no bucket is a different problem from a MinIO that is not
+        running, and the two need different advice.
+        """
+        try:
+            exists = self.bucket_exists()
+        except LandingZoneError as error:
+            logger.warning("Landing zone unavailable: %s", error)
+            return LandingZoneStatus(reachable=False, bucket_exists=False, detail=str(error))
+        if not exists:
+            return LandingZoneStatus(
+                reachable=True,
+                bucket_exists=False,
+                detail=(
+                    f"Bucket `{self.bucket}` does not exist yet — it is created "
+                    "on the first upload, or by `make up`."
+                ),
+            )
+        return LandingZoneStatus(reachable=True, bucket_exists=True, detail="")
 
     def is_reachable(self) -> bool:
-        """Return whether MinIO answers — used for Streamlit's status badges."""
-        try:
-            self._client.bucket_exists(self.bucket)
-        except (S3Error, OSError) as error:  # pragma: no cover - network dependent
-            logger.warning("MinIO unreachable: %s", error)
-            return False
-        return True
+        """Return whether MinIO answers at all."""
+        return self.check_status().reachable
 
     # --- write -------------------------------------------------------------
     def put_export(
@@ -72,13 +133,14 @@ class LandingZoneClient:
         snapshot_ts = snapshot_ts or utcnow()
         key = build_object_key(self.raw_prefix, snapshot_ts, file_hash)
         self.ensure_bucket()
-        self._client.put_object(
-            self.bucket,
-            key,
-            io.BytesIO(raw),
-            length=len(raw),
-            content_type=_CSV_CONTENT_TYPE,
-        )
+        with _landing_zone_errors(f"upload {key!r}"):
+            self._client.put_object(
+                self.bucket,
+                key,
+                io.BytesIO(raw),
+                length=len(raw),
+                content_type=_CSV_CONTENT_TYPE,
+            )
         logger.info("Uploaded %d bytes to s3://%s/%s", len(raw), self.bucket, key)
         return LandingObject(
             key=key,
@@ -95,9 +157,13 @@ class LandingZoneClient:
         loud warning rather than being guessed at (§17).
         """
         objects: list[LandingObject] = []
-        for item in self._client.list_objects(
-            self.bucket, prefix=f"{self.raw_prefix}/", recursive=True
-        ):
+        with _landing_zone_errors(f"list objects in {self.bucket!r}"):
+            items = list(
+                self._client.list_objects(
+                    self.bucket, prefix=f"{self.raw_prefix}/", recursive=True
+                )
+            )
+        for item in items:
             try:
                 parts = parse_object_key(item.object_name)
             except ObjectKeyError as error:
@@ -116,9 +182,10 @@ class LandingZoneClient:
 
     def get_object_bytes(self, key: str) -> bytes:
         """Download an object's full content."""
-        response = self._client.get_object(self.bucket, key)
-        try:
-            return response.read()
-        finally:
-            response.close()
-            response.release_conn()
+        with _landing_zone_errors(f"download {key!r}"):
+            response = self._client.get_object(self.bucket, key)
+            try:
+                return response.read()
+            finally:
+                response.close()
+                response.release_conn()
