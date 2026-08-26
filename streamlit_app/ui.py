@@ -16,11 +16,6 @@ from common.settings import get_settings
 PAGE_ICON = "🔗"
 APP_TITLE = "Connection Lens"
 
-PRIVACY_NOTE = (
-    "Local-only, single-user tool. This app reads your own LinkedIn data "
-    "export from a DuckDB file on this machine — nothing is sent anywhere."
-)
-
 
 def configure_page(subtitle: str, *, layout: str = "wide") -> None:
     """Apply the shared page config and header."""
@@ -108,10 +103,9 @@ def minio_status() -> LandingZoneStatus:
 
 
 def render_sidebar_footer() -> None:
-    """Consistent privacy reminder in the sidebar."""
+    """Bottom of the sidebar, shared by every page."""
     with st.sidebar:
         st.divider()
-        st.caption(PRIVACY_NOTE)
 
 
 def require_warehouse(status: dict[str, bool], layer: str, hint: str) -> None:
