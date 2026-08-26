@@ -21,6 +21,7 @@ import streamlit as st  # noqa: E402
 
 from common.settings import get_settings  # noqa: E402
 from streamlit_app import db  # noqa: E402
+from streamlit_app.auth import require_login  # noqa: E402
 from streamlit_app.ui import (  # noqa: E402
     APP_TITLE,
     configure_page,
@@ -30,6 +31,7 @@ from streamlit_app.ui import (  # noqa: E402
 )
 
 configure_page("Overview")
+require_login()
 
 st.title(f"🔗 {APP_TITLE}")
 st.caption(
@@ -60,9 +62,9 @@ with col_warehouse:
 
 with col_minio:
     st.markdown("**Landing zone**")
-    reachable, detail = minio_status()
-    st.write("✅ Reachable" if reachable else "⚠️ Unavailable")
-    st.caption(detail)
+    landing_zone = minio_status()
+    st.write("✅ Reachable" if landing_zone.is_ready else "⚠️ Unavailable")
+    st.caption(landing_zone.detail or "—")
 
 with col_airflow:
     st.markdown("**Orchestration**")
