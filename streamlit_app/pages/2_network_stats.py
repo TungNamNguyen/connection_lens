@@ -13,6 +13,7 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 from streamlit_app import charts, db  # noqa: E402
+from streamlit_app.auth import require_login  # noqa: E402
 from streamlit_app.tagging import ALL_TAGS, TAG_DESCRIPTIONS, tag_connection  # noqa: E402
 from streamlit_app.ui import (  # noqa: E402
     configure_page,
@@ -22,6 +23,7 @@ from streamlit_app.ui import (  # noqa: E402
 )
 
 configure_page("Network Stats")
+require_login()
 st.title("📊 Network stats")
 
 status = db.warehouse_status()
