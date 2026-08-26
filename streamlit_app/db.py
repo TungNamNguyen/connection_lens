@@ -175,10 +175,11 @@ def load_connected_over_time() -> pd.DataFrame:
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def load_current_connections() -> pd.DataFrame:
-    """Every current connection, with recency of its last recorded change (§9).
+    """Every current connection, for the Job Search ranking (§9).
 
     `is_current` is derived the way dbt snapshots express it: an open row has
-    no `dbt_valid_to`.
+    no `dbt_valid_to`. Recency of change is deliberately absent — it is shown
+    in its own panel, not folded into the referral ranking.
     """
     return safe_query(
         f"""
@@ -193,16 +194,12 @@ def load_current_connections() -> pd.DataFrame:
             company_dim.current_connection_count as company_connection_count,
             dim.position,
             dim.connected_on,
-            dim.dbt_valid_from as last_changed_at,
-            cast(
-                date_diff('day', dim.dbt_valid_from, current_timestamp) as integer
-            ) as days_since_change,
             dim.dbt_valid_to is null as is_current
         from {DIM_CONNECTION} as dim
         left join {DIM_COMPANY} as company_dim
             on dim.company_key = company_dim.company_key
         where dim.dbt_valid_to is null
-        order by dim.dbt_valid_from desc
+        order by dim.full_name
         """
     )
 
