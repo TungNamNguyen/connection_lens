@@ -22,6 +22,7 @@ from common.errors import ConnectionLensError  # noqa: E402
 from common.models import TriggerSource  # noqa: E402
 from common.settings import get_settings  # noqa: E402
 from streamlit_app import db  # noqa: E402
+from streamlit_app.auth import require_login  # noqa: E402
 from streamlit_app.ui import (  # noqa: E402
     configure_page,
     format_duration,
@@ -31,6 +32,7 @@ from streamlit_app.ui import (  # noqa: E402
 )
 
 configure_page("Job Management")
+require_login()
 st.title("⚙️ Job management")
 
 settings = get_settings()
