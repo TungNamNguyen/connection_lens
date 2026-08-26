@@ -71,6 +71,9 @@ _SENIORITY_PATTERN: Final = re.compile(
 
 #: Keeps unicode letters (company names carry Vietnamese diacritics).
 _PUNCTUATION: Final = re.compile(r"[^\w\s]+", re.UNICODE)
+#: "Brand (Legal entity)" — the two halves are separate aliases.
+_PARENTHESES: Final = re.compile(r"\([^)]*\)")
+_PARENTHESES_CONTENT: Final = re.compile(r"\(([^)]*)\)")
 _WHITESPACE: Final = re.compile(r"\s+")
 
 MONTHS_PER_YEAR: Final = 12
@@ -172,6 +175,28 @@ def normalise_company_name(name: str | None) -> str:
     return " ".join(tokens)
 
 
+def company_aliases(name: str | None) -> set[str]:
+    """Every spelling of a company worth comparing on.
+
+    LinkedIn routinely writes an employer as ``Brand (Legal entity)`` or
+    ``Brand (ABBR)`` — "MoMo (M_Service)", "Techcombank (TCB)". Someone
+    searching for the brand means the company, so the bracketed part is
+    treated as a separate alias rather than as part of one long name.
+    """
+    if not name:
+        return set()
+    aliases = set()
+    for candidate in (
+        name,
+        _PARENTHESES.sub(" ", name),
+        *_PARENTHESES_CONTENT.findall(name),
+    ):
+        normalised = normalise_company_name(candidate)
+        if normalised:
+            aliases.add(normalised)
+    return aliases
+
+
 def company_match(company: str | None, target_company: str | None) -> str:
     """Classify an employer against the target company.
 
@@ -181,7 +206,9 @@ def company_match(company: str | None, target_company: str | None) -> str:
     right = normalise_company_name(target_company)
     if not left or not right:
         return "none"
-    if left == right:
+    # Any alias matching outright is an exact match: "MoMo (M_Service)" is
+    # MoMo, however the export chose to spell it.
+    if company_aliases(company) & company_aliases(target_company):
         return "exact"
     left_tokens = set(left.split())
     right_tokens = set(right.split())
