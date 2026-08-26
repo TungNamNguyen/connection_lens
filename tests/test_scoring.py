@@ -14,6 +14,7 @@ import pytest
 from streamlit_app.scoring import (
     DEFAULT_WEIGHTS,
     ReferralWeights,
+    company_aliases,
     company_match,
     has_seniority_signal,
     months_since,
@@ -46,7 +47,7 @@ def test_company_normalisation(raw: str | None, expected: str) -> None:
     [
         ("Example Corporation", "Example", "exact"),
         ("Example", "example corporation", "exact"),
-        ("Acme Bank (ACMB)", "Acme Bank", "partial"),
+        ("Acme Bank (ACMB)", "Acme Bank", "exact"),
         ("Globex", "Acme Shop", "none"),
         ("Acme Software", "Acme Retail", "none"),
         (None, "Example", "none"),
@@ -96,9 +97,10 @@ def test_an_unrelated_company_never_earns_the_target_term() -> None:
 
 
 def test_a_partial_company_match_scores_less() -> None:
+    """A bare token inside a longer name is a hint, not a confirmation."""
     breakdown = score_referral(
         company="Acme Bank (ACMB)", position="Data Analyst",
-        target_company="Acme Bank", today=TODAY,
+        target_company="acme", today=TODAY,
     )
     assert breakdown.components["target_company_partial"] == (
         DEFAULT_WEIGHTS.target_company_partial
@@ -225,3 +227,28 @@ def test_score_connections_handles_an_empty_frame() -> None:
     scored = score_connections(empty, "Acme Bank")
     assert scored.empty
     assert "score" in scored.columns
+
+
+# --- "Brand (Legal entity)" spellings --------------------------------------
+@pytest.mark.parametrize(
+    ("company", "target", "expected"),
+    [
+        # LinkedIn writes the legal entity in brackets; searching the brand
+        # must still count as working there.
+        ("MoMo (M_Service)", "momo", "exact"),
+        ("MoMo (M_Service)", "M_Service", "exact"),
+        ("Acme Bank (ACMB)", "ACMB", "exact"),
+        # A bare token that is merely part of a longer name stays ambiguous.
+        ("Acme Bank (ACMB)", "acme", "partial"),
+        ("Globex", "MoMo", "none"),
+    ],
+)
+def test_a_bracketed_legal_entity_is_an_alias(
+    company: str, target: str, expected: str
+) -> None:
+    assert company_match(company, target) == expected
+
+
+def test_company_aliases_lists_both_halves() -> None:
+    assert company_aliases("MoMo (M_Service)") == {"momo m_service", "momo", "m_service"}
+    assert company_aliases(None) == set()
