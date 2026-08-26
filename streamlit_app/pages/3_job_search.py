@@ -18,6 +18,7 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 from streamlit_app import db  # noqa: E402
+from streamlit_app.auth import require_login  # noqa: E402
 from streamlit_app.scoring import DEFAULT_WEIGHTS, score_connections  # noqa: E402
 from streamlit_app.tagging import ALL_TAGS, format_tags, tag_connection  # noqa: E402
 from streamlit_app.ui import (  # noqa: E402
@@ -40,6 +41,7 @@ SORT_RECENCY = "Days since change (recent first)"
 SORT_NAME = "Name (A → Z)"
 
 configure_page("Job Search")
+require_login()
 st.title("🎯 Job search")
 
 status = db.warehouse_status()
