@@ -25,6 +25,7 @@ from streamlit_app.tagging import ALL_TAGS, format_tags, tag_connection  # noqa:
 from streamlit_app.ui import (  # noqa: E402
     configure_page,
     display_profile_url,
+    fold_accents,
     format_date,
     format_timestamp,
     render_sidebar_footer,
@@ -62,7 +63,7 @@ connections = connections.assign(
 )
 
 # --- Filters ---------------------------------------------------------------
-filter_columns = st.columns([2, 2, 2])
+filter_columns = st.columns([2, 2, 2, 2])
 
 with filter_columns[0]:
     selected_tags = st.multiselect(
@@ -74,11 +75,19 @@ with filter_columns[0]:
     include_untagged = st.checkbox("Include untagged", value=True)
 
 with filter_columns[1]:
+    people_search = st.text_input(
+        "Name or position contains",
+        placeholder="e.g. nguyen, data engineer",
+        value="",
+        help="Accent-blind: typing “nguyen” finds “Nguyễn”.",
+    )
+
+with filter_columns[2]:
     company_search = st.text_input(
         "Company contains", placeholder="e.g. Acme Bank", value=""
     )
 
-with filter_columns[2]:
+with filter_columns[3]:
     sort_choice = st.selectbox(
         "Sort by", [SORT_SCORE, SORT_NAME, SORT_COMPANY], index=0
     )
@@ -94,10 +103,18 @@ if selected_tags:
 elif not include_untagged:
     filtered = filtered[filtered["tags"].map(bool)]
 
+if people_search.strip():
+    # One box over both fields: you either remember the person or the job.
+    needle = fold_accents(people_search.strip())
+    haystack = filtered["full_name"].map(fold_accents) + " " + filtered[
+        "position"
+    ].map(fold_accents)
+    filtered = filtered[haystack.str.contains(needle, regex=False)]
+
 if company_search.strip():
-    needle = company_search.strip().lower()
+    needle = fold_accents(company_search.strip())
     filtered = filtered[
-        filtered["company"].fillna("").str.lower().str.contains(needle, regex=False)
+        filtered["company"].map(fold_accents).str.contains(needle, regex=False)
     ]
 
 scored = score_connections(filtered)
