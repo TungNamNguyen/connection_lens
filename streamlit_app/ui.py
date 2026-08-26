@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import urllib.parse
+from dataclasses import replace
 from datetime import UTC, datetime
 
 import pandas as pd
 import streamlit as st
 
 from common.errors import ConnectionLensError
-from common.minio_client import LandingZoneClient
+from common.minio_client import LandingZoneClient, LandingZoneStatus
 from common.settings import get_settings
 
 PAGE_ICON = "🔗"
@@ -68,20 +69,31 @@ def landing_zone_client() -> LandingZoneClient:
     return LandingZoneClient.from_settings()
 
 
-def minio_status() -> tuple[bool, str]:
-    """Return whether MinIO answers, plus a human-readable detail."""
+def minio_status() -> LandingZoneStatus:
+    """Describe the landing zone for the status badges.
+
+    "MinIO is down" and "the bucket does not exist yet" are reported
+    separately: only the first one makes the Upload tab unusable.
+    """
     settings = get_settings()
     if not settings.has_minio_credentials:
-        return False, "No MinIO credentials configured — copy `.env.example` to `.env`."
+        return LandingZoneStatus(
+            reachable=False,
+            bucket_exists=False,
+            detail="No MinIO credentials configured — copy `.env.example` to `.env`.",
+        )
     try:
         client = landing_zone_client()
     except ConnectionLensError as error:
-        return False, str(error)
-    if client.is_reachable():
-        return True, (
-            f"Console {settings.minio_public_url} · bucket `{settings.minio_bucket}`"
+        return LandingZoneStatus(reachable=False, bucket_exists=False, detail=str(error))
+
+    status = client.check_status()
+    if status.is_ready:
+        return replace(
+            status,
+            detail=f"Console {settings.minio_public_url} · bucket `{settings.minio_bucket}`",
         )
-    return False, f"Cannot reach MinIO at {settings.minio_endpoint}."
+    return status
 
 
 def render_sidebar_footer() -> None:
