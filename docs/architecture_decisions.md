@@ -21,6 +21,10 @@ Landing raw files in object storage first is the pattern this project is meant
 to demonstrate, and it keeps a complete **upload audit trail**: MinIO keeps
 every uploaded object, exact duplicates included. Only Bronze de-duplicates.
 
+Nothing in the pipeline ever removes an object — there is no retention policy,
+no cleanup job and no lifecycle rule. The single exception is the owner
+deleting one by hand from the Upload tab, which §13 covers.
+
 ## 3. Idempotency = MD5 of the file's bytes, checked against Bronze
 
 Not the calendar date. Not the upload timestamp. Not which trigger fired.
