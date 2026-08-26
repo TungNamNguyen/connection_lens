@@ -147,3 +147,28 @@ internal hostname.
 
 The listener additionally accepts a shared bearer token
 (`MINIO_EVENT_LISTENER_TOKEN`) so that only MinIO can ask it to start a run.
+
+
+## 13. Deleting from the landing zone, on purpose
+
+The original design keeps **every** uploaded object forever: MinIO is the
+upload audit trail, and duplicates are retained deliberately. The Upload tab
+now offers a delete button anyway, because the owner asked for one — a
+personal tool should let its owner remove a file they uploaded by mistake.
+
+The trade-off is contained rather than waved away:
+
+* deletion is reachable **only** from the Upload tab, and the client refuses
+  any key outside the configured landing-zone prefix, so the rest of the
+  bucket is unreachable from the UI;
+* it removes **every version** of the object. The bucket is versioned, so
+  stacking a delete marker would leave the bytes on disk while telling the
+  owner they were gone;
+* the confirmation states plainly whether the object has been ingested. If it
+  has, only the landing-zone copy goes and Bronze keeps the data; if it has
+  not, the export is lost for good and the warning says so;
+* every deletion is logged at WARNING level with the object key and version
+  count — the audit trail loses the object, not the record that it went.
+
+Bronze is never touched by this path, so the dataset of record and the
+idempotency rules built on it are unaffected.
