@@ -119,13 +119,28 @@ def test_pages_render_with_data(path: str, built_warehouse: Path) -> None:
     assert_no_exception(app, path)
 
 
-def test_job_search_scores_when_a_target_company_is_set(built_warehouse: Path) -> None:
+def test_job_search_ranks_without_any_configuration(built_warehouse: Path) -> None:
+    """No target company to type: the ranking is meaningful on arrival."""
     app = run_page("streamlit_app/pages/3_job_search.py")
     assert_no_exception(app, "3_job_search.py")
-    target = [item for item in app.text_input if item.label == "Target company"]
-    assert target, "the Job Search tab must expose a target-company input"
-    target[0].set_value("Example Corporation").run()
-    assert_no_exception(app, "3_job_search.py (scored)")
+
+    labels = {item.label for item in app.text_input}
+    assert "Target company" not in labels, "the target company input was removed"
+    assert "Company contains" in labels, "company filtering stays"
+
+    scores = app.dataframe[0].value["Score"]
+    assert scores.max() > 0, "somebody must score without a target company"
+    assert scores.is_monotonic_decreasing, "the table is sorted by referral strength"
+
+
+def test_job_search_company_filter_narrows_the_table(built_warehouse: Path) -> None:
+    app = run_page("streamlit_app/pages/3_job_search.py")
+    before = len(app.dataframe[0].value)
+
+    company = next(item for item in app.text_input if item.label == "Company contains")
+    company.set_value("acme").run()
+    assert_no_exception(app, "3_job_search.py (filtered)")
+    assert len(app.dataframe[0].value) < before
 
 
 def test_airflow_link_points_at_the_browser_url(
