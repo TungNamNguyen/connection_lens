@@ -68,7 +68,7 @@ make dbt-deps
 
 # 2. Configuration: creates .env and pins AIRFLOW_UID to your user
 make env
-$EDITOR .env          # set the MinIO and Airflow credentials
+$EDITOR .env          # set the MinIO, Airflow and app-login credentials
 
 # 3. Start the whole stack (MinIO + Airflow + Streamlit + event listener)
 make up          # == docker compose up -d --build
@@ -76,7 +76,7 @@ make up          # == docker compose up -d --build
 
 | Service | URL | Notes |
 | --- | --- | --- |
-| Streamlit | <http://localhost:8501> | Upload, Network Stats, Job Search, Job Management |
+| Streamlit | <http://localhost:8501> | Upload, Network Stats, Job Search, Job Management. Sign in with `STREAMLIT_AUTH_USERNAME` / `STREAMLIT_AUTH_PASSWORD` |
 | Airflow | <http://localhost:8080> | Credentials from `.env` |
 | MinIO console | <http://localhost:9001> | Credentials from `.env` |
 
@@ -118,7 +118,7 @@ connection_lens/
 │   └── tests/                    # singular tests (SCD2 integrity, volume, share)
 ├── great_expectations/checkpoints/bronze_to_silver.py
 ├── services/minio_event_listener/main.py
-├── streamlit_app/                # app.py + pages/ + scoring.py + tagging.py + db.py
+├── streamlit_app/                # app.py + pages/ + auth.py + scoring.py + tagging.py + db.py
 ├── scripts/                      # CI fixture builder, SCD2 behaviour assertions
 ├── tests/                        # pytest, synthetic fixtures only
 ├── docker/                       # Dockerfiles for Airflow, Streamlit, listener
@@ -227,6 +227,10 @@ A few things worth knowing if you read the code:
   profile. They cannot be given a stable identity, so they are flagged in
   Silver, excluded from Gold, and **counted** in `mart_network_stats` rather
   than dropped silently. See [docs/data_quality.md](docs/data_quality.md).
+* **Every tab is behind a login.** The app carries real names, employers and
+  profile URLs, so `streamlit_app/auth.py` gates each page — including one
+  opened directly by URL — against a single owner account read from `.env`.
+  With no account configured the app fails closed instead of falling open.
 * **Streamlit can never write to the warehouse.** It opens DuckDB read-only in
   code *and* mounts the warehouse read-only in Docker. Every write happens
   inside the DAG, which is what keeps DuckDB's single-writer constraint safe.
