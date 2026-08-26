@@ -564,8 +564,8 @@ nằm ngoài file page.
 
 | File | Nội dung |
 | --- | --- |
-| `tagging.py` | `tag_connection(position) -> list[str]` — taxonomy `recruiter_talent` / `leadership` / `executive` / `target_peer`, **không loại trừ nhau** |
-| `scoring.py` | `ScoringWeights` (dataclass), `score_connection()` — mỗi điểm số mang theo **lý do**, nên chỉnh trọng số là sửa một dòng |
+| `tagging.py` | `tag_connection(position) -> list[str]` — 6 tag `recruiter_talent` / `leadership` / `executive` / `target_peer` / `engineering` / `early_career`, **không loại trừ nhau** |
+| `scoring.py` | `ReferralWeights` (dataclass), `score_referral()` — mỗi điểm số mang theo **lý do**, nên chỉnh trọng số là sửa một dòng |
 | `upload_service.py` | `prepare_upload()` → `perform_upload()` — validate → hash → kiểm Bronze → land vào MinIO |
 | `db.py` | Mọi truy vấn, luôn qua `connect_read_only`; `safe_query()` trả DataFrame rỗng khi warehouse chưa có |
 
@@ -594,7 +594,7 @@ Tab Upload **không bao giờ** kích ingestion — việc đó thuộc về Job
 | --- | --- |
 | `pages/1_upload.py` | Validate + hash + đẩy lên MinIO. Không trigger. |
 | `pages/2_network_stats.py` | Chart read-only từ `mart_network_stats` / `mart_network_breakdown` |
-| `pages/3_job_search.py` | Bảng lọc/sắp xếp toàn bộ connection hiện tại + scoring theo target company |
+| `pages/3_job_search.py` | Bảng lọc/sắp xếp toàn bộ connection hiện tại, xếp hạng theo **referral strength** (không cần nhập gì) |
 | `pages/4_job_management.py` | Nút trigger + bảng lịch sử run + viewer log, qua Airflow REST |
 
 `app.py` là entrypoint: vá `sys.path`, `require_login()`, hiển thị trạng thái ba
