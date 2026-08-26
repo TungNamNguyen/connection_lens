@@ -32,13 +32,31 @@ def s3_error(code: str) -> S3Error:
     )
 
 
+class StubObject:
+    """One version of one object, as `list_objects` reports it."""
+
+    def __init__(self, name: str, version_id: str | None = None) -> None:
+        self.object_name = name
+        self.version_id = version_id
+        self.size = 10
+        self.last_modified = None
+
+
 class StubMinio:
     """Minimal stand-in for the MinIO SDK client."""
 
-    def __init__(self, *, exists: bool = True, failure: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        exists: bool = True,
+        failure: Exception | None = None,
+        objects: list[StubObject] | None = None,
+    ) -> None:
         self.exists = exists
         self.failure = failure
         self.made_buckets: list[str] = []
+        self.objects = objects or []
+        self.removed: list[tuple[str, str | None]] = []
 
     def _maybe_fail(self) -> None:
         if self.failure is not None:
@@ -53,8 +71,20 @@ class StubMinio:
         self.made_buckets.append(bucket)
         self.exists = True
 
-    def list_objects(self, bucket: str, prefix: str = "", recursive: bool = False) -> Any:
+    def list_objects(
+        self,
+        bucket: str,
+        prefix: str = "",
+        recursive: bool = False,
+        include_version: bool = False,
+    ) -> Any:
         self._maybe_fail()
+        return iter([o for o in self.objects if o.object_name.startswith(prefix)])
+
+    def remove_objects(self, bucket: str, delete_object_list: Any) -> Any:
+        self._maybe_fail()
+        for item in delete_object_list:
+            self.removed.append((item.name, item.version_id))
         return iter(())
 
     def get_object(self, bucket: str, key: str) -> Any:
@@ -128,3 +158,51 @@ def test_ensure_bucket_creates_a_missing_bucket() -> None:
     client, stub = make_client(exists=False)
     client.ensure_bucket()
     assert stub.made_buckets == [BUCKET]
+
+
+# --- deleting from the landing zone ---------------------------------------
+DELETABLE = f"{PREFIX}/20260826T161343Z_60481054.csv"
+
+
+def make_client_with_objects(*objects: StubObject) -> tuple[LandingZoneClient, StubMinio]:
+    stub = StubMinio(objects=list(objects))
+    return LandingZoneClient(stub, BUCKET, PREFIX), stub  # type: ignore[arg-type]
+
+
+def test_deleting_removes_every_version() -> None:
+    """The bucket is versioned, so "deleted" has to mean deleted."""
+    client, stub = make_client_with_objects(
+        StubObject(DELETABLE, "v1"), StubObject(DELETABLE, "v2")
+    )
+    assert client.delete_object(DELETABLE) == 2
+    assert stub.removed == [(DELETABLE, "v1"), (DELETABLE, "v2")]
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "other-prefix/secret.csv",
+        "../../etc/passwd",
+        "raw/linkedin_connections_backup/x.csv",
+        "",
+    ],
+)
+def test_deleting_outside_the_landing_prefix_is_refused(key: str) -> None:
+    """The UI must never be able to reach the rest of the bucket."""
+    client, stub = make_client_with_objects(StubObject(DELETABLE))
+    with pytest.raises(LandingZoneError, match="Refusing to delete"):
+        client.delete_object(key)
+    assert stub.removed == []
+
+
+def test_deleting_something_that_is_not_there_says_so() -> None:
+    client, _ = make_client_with_objects()
+    with pytest.raises(LandingZoneError, match="No object named"):
+        client.delete_object(DELETABLE)
+
+
+def test_a_delete_failure_is_translated() -> None:
+    stub = StubMinio(objects=[StubObject(DELETABLE)], failure=s3_error("AccessDenied"))
+    client = LandingZoneClient(stub, BUCKET, PREFIX)  # type: ignore[arg-type]
+    with pytest.raises(LandingZoneError, match="AccessDenied"):
+        client.delete_object(DELETABLE)
