@@ -20,11 +20,7 @@ import streamlit as st  # noqa: E402
 
 from streamlit_app import db  # noqa: E402
 from streamlit_app.auth import require_login  # noqa: E402
-from streamlit_app.scoring import (  # noqa: E402
-    DEFAULT_WEIGHTS,
-    company_match,
-    score_connections,
-)
+from streamlit_app.scoring import DEFAULT_WEIGHTS, score_connections  # noqa: E402
 from streamlit_app.tagging import ALL_TAGS, format_tags, tag_connection  # noqa: E402
 from streamlit_app.ui import (  # noqa: E402
     configure_page,
@@ -66,7 +62,7 @@ connections = connections.assign(
 )
 
 # --- Filters ---------------------------------------------------------------
-filter_columns = st.columns([2, 2, 2, 2])
+filter_columns = st.columns([2, 2, 2])
 
 with filter_columns[0]:
     selected_tags = st.multiselect(
@@ -83,11 +79,6 @@ with filter_columns[1]:
     )
 
 with filter_columns[2]:
-    target_company = st.text_input(
-        "Target company", placeholder="Where do you want to work?", value=""
-    )
-
-with filter_columns[3]:
     sort_choice = st.selectbox(
         "Sort by", [SORT_SCORE, SORT_NAME, SORT_COMPANY], index=0
     )
@@ -109,7 +100,7 @@ if company_search.strip():
         filtered["company"].fillna("").str.lower().str.contains(needle, regex=False)
     ]
 
-scored = score_connections(filtered, target_company)
+scored = score_connections(filtered)
 
 if sort_choice == SORT_SCORE:
     scored = scored.sort_values(
@@ -126,19 +117,9 @@ summary_columns[0].metric("Matching connections", f"{len(scored):,}")
 summary_columns[1].metric("Of total", f"{len(connections):,}")
 strong = int((scored["score"] >= STRONG_SCORE_THRESHOLD).sum()) if len(scored) else 0
 summary_columns[2].metric(f"Scoring {STRONG_SCORE_THRESHOLD}+", f"{strong:,}")
-if target_company.strip():
-    # Count people actually employed there — a high score alone does not mean
-    # someone works at the target, now that the score stands on its own.
-    at_target = int(
-        scored["company"]
-        .map(lambda name: company_match(name, target_company) == "exact")
-        .sum()
-    )
-    summary_columns[3].metric(f"At {target_company.strip()}", f"{at_target:,}")
-else:
-    summary_columns[3].metric(
-        "Top score", f"{int(scored['score'].max()) if len(scored) else 0}"
-    )
+summary_columns[3].metric(
+    "Companies covered", f"{scored['company'].dropna().nunique():,}"
+)
 
 # --- Table -----------------------------------------------------------------
 table = pd.DataFrame(
@@ -236,30 +217,30 @@ with signal_columns[1]:
 with st.expander("How referral strength is scored"):
     st.markdown(
         f"""
-The score answers one question: **how strong a referral could this person
-give?** It scores the person, so it is meaningful before you name a target —
-naming one just adds the largest single term.
+The score answers one question: **how strongly could this person refer you
+into the company they work at today?** Nothing to configure — it reads the
+employer already in the export.
 
-| Signal | Points | Why it counts |
-| --- | --- | --- |
-| Works at the target company | +{DEFAULT_WEIGHTS.target_company_exact} | Only someone inside can refer you in |
-| Company related to the target | +{DEFAULT_WEIGHTS.target_company_partial} | Same group or a name variant |
-| Recruiter / talent | +{DEFAULT_WEIGHTS.role_recruiter} | Moving CVs is their job |
-| Executive | +{DEFAULT_WEIGHTS.role_executive} | Senior enough to create a role |
-| Leadership | +{DEFAULT_WEIGHTS.role_leadership} | Usually holds hiring authority |
-| Peer in your field | +{DEFAULT_WEIGHTS.role_peer} | Can vouch for your work credibly |
-| A second role tag | +{DEFAULT_WEIGHTS.additional_role_tag} | "Director of Analytics" beats "Director" |
-| Seniority in the title | +{DEFAULT_WEIGHTS.seniority} | A senior voice carries further |
-| Connected within {DEFAULT_WEIGHTS.recent_connection_months} months | +{DEFAULT_WEIGHTS.recent_connection} | They are more likely to remember you |
-| Email in the export | +{DEFAULT_WEIGHTS.reachable_by_email} | Reachable without InMail |
+| Signal | Points |
+| --- | --- |
+| Recruiter / talent | +{DEFAULT_WEIGHTS.role_recruiter} |
+| Executive | +{DEFAULT_WEIGHTS.role_executive} |
+| Leadership | +{DEFAULT_WEIGHTS.role_leadership} |
+| Peer in your field | +{DEFAULT_WEIGHTS.role_peer} |
+| Engineering | +{DEFAULT_WEIGHTS.role_engineering} |
+| A second role tag | +{DEFAULT_WEIGHTS.additional_role_tag} |
+| Seniority in the title | +{DEFAULT_WEIGHTS.seniority} |
+| Connected within {DEFAULT_WEIGHTS.recent_connection_months} months | +{DEFAULT_WEIGHTS.recent_connection} |
+| Email in the export | +{DEFAULT_WEIGHTS.reachable_by_email} |
+| Early in their career | −{DEFAULT_WEIGHTS.early_career_penalty} |
 
 Only the strongest role tag scores; a second one adds a little rather than
-doubling. Maximum **{DEFAULT_WEIGHTS.maximum}**.
+doubling. Someone with **no employer in the export scores 0** — there is
+nowhere for them to refer you. Maximum **{DEFAULT_WEIGHTS.maximum}**.
 
-**Not scored: how recently they changed job.** That signal needs several
-ingested exports before it means anything, and until then it fires for
-everyone equally — which ranks nothing. Recent moves are shown as their own
-panel above instead.
+**Not scored: how recently they changed job.** That needs several ingested
+exports before it means anything. Recent moves are shown in their own panel
+above instead.
 
 The weights live in one dataclass in `streamlit_app/scoring.py`, and the
 **Why** column always shows which of them fired.
