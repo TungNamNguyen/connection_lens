@@ -133,6 +133,23 @@ def test_job_search_ranks_without_any_configuration(built_warehouse: Path) -> No
     assert scores.is_monotonic_decreasing, "the table is sorted by referral strength"
 
 
+def test_job_search_can_search_names_and_positions(built_warehouse: Path) -> None:
+    """One box over both fields — you either remember the person or the job."""
+    app = run_page("streamlit_app/pages/3_job_search.py")
+    before = len(app.dataframe[0].value)
+
+    search = next(
+        item for item in app.text_input if item.label == "Name or position contains"
+    )
+    search.set_value("engineer").run()
+    assert_no_exception(app, "3_job_search.py (searched)")
+
+    table = app.dataframe[0].value
+    assert 0 < len(table) < before
+    matched = table["Name"].fillna("") + " " + table["Position"].fillna("")
+    assert matched.str.lower().str.contains("engineer").all()
+
+
 def test_job_search_company_filter_narrows_the_table(built_warehouse: Path) -> None:
     app = run_page("streamlit_app/pages/3_job_search.py")
     before = len(app.dataframe[0].value)
