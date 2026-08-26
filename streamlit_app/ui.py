@@ -51,6 +51,17 @@ def format_timestamp(value: object) -> str:
     return pd.Timestamp(value).strftime("%Y-%m-%d %H:%M")
 
 
+def format_date(value: object) -> str:
+    """Render a date as YYYY-MM-DD, tolerating NaT/None."""
+    if value is None:
+        return "—"
+    try:
+        stamp = pd.Timestamp(value)
+    except (ValueError, TypeError):
+        return "—"
+    return "—" if pd.isna(stamp) else stamp.strftime("%Y-%m-%d")
+
+
 def format_duration(seconds: float | None) -> str:
     """Render a duration in seconds as `1m 04s`."""
     if seconds is None or pd.isna(seconds):
