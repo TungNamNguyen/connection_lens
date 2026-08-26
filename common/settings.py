@@ -59,6 +59,12 @@ class Settings(BaseSettings):
     # --- MinIO event listener ---------------------------------------------
     minio_event_listener_token: SecretStr = SecretStr("")
 
+    # --- Streamlit app login ----------------------------------------------
+    #: The single owner account guarding every tab. Like every other
+    #: credential it lives in `.env`, never in code (§17).
+    streamlit_auth_username: str = ""
+    streamlit_auth_password: SecretStr = SecretStr("")
+
     # --- dbt ---------------------------------------------------------------
     dbt_project_dir: Path = Path("./dbt_project")
     dbt_profiles_dir: Path = Path("./dbt_project")
@@ -84,6 +90,18 @@ class Settings(BaseSettings):
         return bool(
             self.minio_access_key.get_secret_value()
             and self.minio_secret_key.get_secret_value()
+        )
+
+    @property
+    def has_app_credentials(self) -> bool:
+        """Whether the Streamlit login is configured.
+
+        The app renders nothing when this is false — a tool sitting on real
+        PII has to fail closed rather than fall open (§1).
+        """
+        return bool(
+            self.streamlit_auth_username
+            and self.streamlit_auth_password.get_secret_value()
         )
 
     @property
