@@ -188,12 +188,17 @@ def ranked_bar_chart(
     label_title: str,
     value_title: str,
     height: int = 320,
+    sort_by_value: bool = True,
 ) -> alt.Chart:
-    """Horizontal ranked bars: one series, one colour, values labelled directly."""
+    """Horizontal bars: one series, one colour, values labelled directly.
+
+    ``sort_by_value=False`` keeps the frame's own order, which is what ordered
+    categories (score bands, career stages) need.
+    """
     base = alt.Chart(frame).encode(
         y=alt.Y(
             f"{label_column}:N",
-            sort="-x",
+            sort="-x" if sort_by_value else None,
             title=label_title,
             axis=alt.Axis(labelLimit=220),
         ),
@@ -225,5 +230,27 @@ def monthly_connections_chart(
     area = base.mark_area(
         color=palette.series_primary, opacity=0.18, line=False
     )
+    line = base.mark_line(strokeWidth=2, color=palette.series_primary)
+    return _styled(area + line, palette, height)
+
+
+def cumulative_connections_chart(
+    frame: pd.DataFrame, palette: Palette, height: int = 260
+) -> alt.Chart:
+    """How the network was built up, from connection dates alone.
+
+    Unlike the growth chart this needs only one ingested snapshot: it counts
+    when each connection was made, not when an export was taken.
+    """
+    base = alt.Chart(frame).encode(
+        x=alt.X("year_month:T", title="Month connected"),
+        y=alt.Y("cumulative_connections:Q", title="Connections in total"),
+        tooltip=[
+            alt.Tooltip("year_month:T", title="Month", format="%Y-%m"),
+            alt.Tooltip("cumulative_connections:Q", title="Total", format=","),
+            alt.Tooltip("connection_count:Q", title="Added that month", format=","),
+        ],
+    )
+    area = base.mark_area(color=palette.series_primary, opacity=0.18, line=False)
     line = base.mark_line(strokeWidth=2, color=palette.series_primary)
     return _styled(area + line, palette, height)
