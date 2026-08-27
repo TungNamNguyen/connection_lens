@@ -19,6 +19,7 @@ from common.csv_schema import KNOWN_COLUMNS, REQUIRED_COLUMNS  # noqa: E402
 from common.errors import ConnectionLensError, CsvSchemaError  # noqa: E402
 from streamlit_app import db  # noqa: E402
 from streamlit_app.auth import require_login  # noqa: E402
+from streamlit_app.theme import page_header, render_status_pill, section  # noqa: E402
 from streamlit_app.ui import (  # noqa: E402
     configure_page,
     format_timestamp,
@@ -30,10 +31,11 @@ from streamlit_app.upload_service import perform_upload, prepare_upload  # noqa:
 
 configure_page("Upload")
 require_login()
-st.title("📤 Upload a LinkedIn export")
-st.caption(
+
+page_header(
+    "Upload a LinkedIn export",
     "Get your file from LinkedIn → Settings → **Get a copy of your data** → "
-    "*Connections*. Nothing here is scraped, and nothing leaves this machine."
+    "*Connections*. Nothing here is scraped, and nothing leaves this machine.",
 )
 
 landing_zone = minio_status()
@@ -41,16 +43,19 @@ if not landing_zone.reachable:
     st.error(f"Landing zone unavailable — {landing_zone.detail}", icon="🚫")
     st.stop()
 if landing_zone.bucket_exists:
-    st.caption(f"Landing zone: {landing_zone.detail}")
+    render_status_pill("Landing zone reachable", "ok")
+    st.caption(landing_zone.detail)
 else:
     # Uploading still works: the client creates the bucket on first write.
-    st.warning(landing_zone.detail, icon="🪣")
+    render_status_pill("Bucket not created yet", "warn")
+    st.caption(landing_zone.detail)
 
-uploaded = st.file_uploader(
-    "Connections.csv",
-    type=["csv"],
-    help=f"Required columns: {', '.join(REQUIRED_COLUMNS)}",
-)
+with st.container(border=True):
+    uploaded = st.file_uploader(
+        "Connections.csv",
+        type=["csv"],
+        help=f"Required columns: {', '.join(REQUIRED_COLUMNS)}",
+    )
 
 if uploaded is None:
     st.info(
@@ -80,9 +85,18 @@ else:
         icon="✅",
     )
 
-    detail_columns = st.columns(2)
-    detail_columns[0].metric("Rows", f"{prepared.row_count:,}")
-    detail_columns[1].metric("Content hash (MD5)", prepared.file_hash[:12] + "…")
+    detail_columns = st.columns(2, gap="medium")
+    detail_columns[0].metric(
+        "Rows", f"{prepared.row_count:,}", icon=":material/table_rows:", border=True
+    )
+    detail_columns[1].metric(
+        "Content hash (MD5)",
+        prepared.file_hash[:12] + "…",
+        icon=":material/fingerprint:",
+        border=True,
+        help="Idempotency is decided by this hash against Bronze — never by "
+        "date, upload time or which trigger fired the run.",
+    )
 
     is_duplicate = db.is_hash_in_bronze(prepared.file_hash)
     if is_duplicate:
@@ -95,10 +109,12 @@ else:
     else:
         st.info("New content — this will become a new snapshot once ingested.", icon="🆕")
 
-    with st.expander("Preview (contains personal data)"):
+    with st.expander("Preview (contains personal data)", icon=":material/visibility:"):
         st.dataframe(prepared.parsed.frame.head(5), width="stretch")
 
-    if st.button("Upload to landing zone", type="primary"):
+    if st.button(
+        "Upload to landing zone", type="primary", icon=":material/cloud_upload:"
+    ):
         try:
             result = perform_upload(
                 prepared, landing_zone_client(), db.is_hash_in_bronze
@@ -117,7 +133,11 @@ else:
 
 st.divider()
 
-st.subheader("Landing zone")
+section(
+    "Landing zone objects",
+    "Every upload is kept, duplicates included — the landing zone is the "
+    "audit trail. Nothing here is ever removed automatically.",
+)
 try:
     objects = landing_zone_client().list_landing_objects()
 except ConnectionLensError as error:
@@ -150,7 +170,9 @@ else:
             "trigger it from **Job Management**."
         )
 
-    with st.expander("Delete an object from the landing zone"):
+    with st.expander(
+        "Delete an object from the landing zone", icon=":material/delete:"
+    ):
         st.caption(
             "The landing zone is normally kept as a complete upload audit "
             "trail, so deleting is deliberate and permanent: every version of "
@@ -184,7 +206,12 @@ else:
         confirmed = st.checkbox(
             "I understand this cannot be undone", key="delete_confirmed"
         )
-        if st.button("Delete permanently", type="primary", disabled=not confirmed):
+        if st.button(
+            "Delete permanently",
+            type="primary",
+            icon=":material/delete_forever:",
+            disabled=not confirmed,
+        ):
             try:
                 removed = landing_zone_client().delete_object(chosen.key)
             except ConnectionLensError as error:
@@ -196,7 +223,11 @@ else:
                 db.clear_caches()
                 st.rerun()
 
-st.subheader("Ingested snapshots (Bronze)")
+section(
+    "Ingested snapshots (Bronze)",
+    "Append-only. One batch per genuinely new export, written by the Airflow "
+    "DAG — never by this app.",
+)
 ingestion_log = db.load_ingestion_log()
 if ingestion_log.empty:
     st.caption("Bronze is empty — no export has been ingested yet.")
