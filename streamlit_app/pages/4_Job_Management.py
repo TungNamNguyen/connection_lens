@@ -23,6 +23,7 @@ from common.models import TriggerSource  # noqa: E402
 from common.settings import get_settings  # noqa: E402
 from streamlit_app import db  # noqa: E402
 from streamlit_app.auth import require_login  # noqa: E402
+from streamlit_app.theme import page_header, section, status_pill  # noqa: E402
 from streamlit_app.ui import (  # noqa: E402
     configure_page,
     format_duration,
@@ -33,7 +34,12 @@ from streamlit_app.ui import (  # noqa: E402
 
 configure_page("Job Management")
 require_login()
-st.title("⚙️ Job management")
+
+page_header(
+    "Job management",
+    "Trigger the ingestion DAG and watch it, without opening Airflow. The DAG "
+    "behaves identically whichever of the three modes started it.",
+)
 
 settings = get_settings()
 
@@ -48,15 +54,27 @@ if not settings.has_airflow_credentials:
 client = AirflowClient.from_settings(settings)
 healthy = client.is_healthy()
 
-status_columns = st.columns([2, 2, 3])
-status_columns[0].markdown(
-    f"**Airflow** {'✅ healthy' if healthy else '⚠️ unreachable'}"
-)
-status_columns[0].caption(settings.airflow_public_url)
-status_columns[1].markdown(f"**DAG** `{settings.airflow_dag_id}`")
-status_columns[2].markdown(
-    f"[Open the Airflow UI ↗]({settings.airflow_public_url}/dags/{settings.airflow_dag_id})"
-)
+airflow_card, dag_card, link_card = st.columns(3, gap="medium")
+
+with airflow_card, st.container(border=True):
+    st.markdown("**Airflow**")
+    st.markdown(
+        status_pill("Healthy" if healthy else "Unreachable", "ok" if healthy else "warn"),
+        unsafe_allow_html=True,
+    )
+    st.caption(settings.airflow_public_url)
+
+with dag_card, st.container(border=True):
+    st.markdown("**DAG**")
+    st.markdown(status_pill(settings.airflow_dag_id, "idle"), unsafe_allow_html=True)
+    st.caption("`max_active_runs=1` — runs are serialised for DuckDB.")
+
+with link_card, st.container(border=True):
+    st.markdown("**Airflow UI**")
+    st.markdown(
+        f"[Open the DAG ↗]({settings.airflow_public_url}/dags/{settings.airflow_dag_id})"
+    )
+    st.caption("For anything this tab does not cover.")
 
 if not healthy:
     st.warning(
@@ -83,7 +101,10 @@ if dag_metadata.get("is_paused"):
 
 # --- Pending work ----------------------------------------------------------
 st.divider()
-st.subheader("Pending work")
+section(
+    "Pending work",
+    "Objects in the landing zone whose content hash is not yet in Bronze.",
+)
 
 pending_count = 0
 try:
@@ -95,8 +116,13 @@ except ConnectionLensError as error:
     st.caption(f"Could not read the landing zone: {error}")
     pending = []
 
-pending_columns = st.columns([1, 3])
-pending_columns[0].metric("Objects awaiting ingestion", pending_count)
+pending_columns = st.columns([1, 3], gap="medium")
+pending_columns[0].metric(
+    "Awaiting ingestion",
+    pending_count,
+    icon=":material/pending_actions:",
+    border=True,
+)
 if pending:
     pending_columns[1].dataframe(
         pd.DataFrame(
@@ -116,9 +142,9 @@ else:
 
 # --- Trigger ---------------------------------------------------------------
 st.divider()
-st.subheader("Trigger ingestion")
+section("Trigger ingestion")
 
-trigger_columns = st.columns([2, 3])
+trigger_columns = st.columns([2, 3], gap="medium")
 with trigger_columns[0]:
     force_transform = st.checkbox(
         "Rebuild dbt models even if nothing new landed",
@@ -128,7 +154,9 @@ with trigger_columns[0]:
             "no-op. Turn on to rebuild Silver/Gold from existing Bronze data."
         ),
     )
-    if st.button("Trigger ingestion now", type="primary"):
+    if st.button(
+        "Trigger ingestion now", type="primary", icon=":material/play_arrow:"
+    ):
         try:
             run = client.trigger_dag_run(
                 TriggerSource.STREAMLIT,
@@ -158,9 +186,12 @@ overlapping trigger is a safe no-op, never a duplicate write.
 
 # --- Run history -----------------------------------------------------------
 st.divider()
-history_header, refresh_column = st.columns([4, 1])
-history_header.subheader("Run history")
-if refresh_column.button("Refresh"):
+history_header, refresh_column = st.columns([4, 1], gap="medium")
+with history_header:
+    section("Run history")
+if refresh_column.button(
+    "Refresh", icon=":material/refresh:", use_container_width=True
+):
     st.rerun()
 
 try:
@@ -193,11 +224,17 @@ st.dataframe(
     ),
     width="stretch",
     hide_index=True,
+    row_height=34,
+    column_config={
+        "Run": st.column_config.TextColumn("Run", pinned=True, width="medium"),
+        "State": st.column_config.TextColumn("State", width="small"),
+        "Duration": st.column_config.TextColumn("Duration", width="small"),
+    },
 )
 
 # --- Logs ------------------------------------------------------------------
 st.divider()
-st.subheader("Logs")
+section("Logs", "Read a task's output here instead of opening the Airflow UI.")
 
 selected_run = st.selectbox("Run", [run.dag_run_id for run in runs])
 try:
@@ -220,7 +257,7 @@ else:
     selected_label = st.selectbox("Task", list(task_labels), index=default_index)
     selected_task = task_labels[selected_label]
 
-    with st.expander("Task log", expanded=True):
+    with st.expander("Task log", expanded=True, icon=":material/terminal:"):
         try:
             log_text = client.get_task_log(
                 selected_run, selected_task.task_id, max(selected_task.try_number, 1)
