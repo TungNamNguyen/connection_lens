@@ -15,6 +15,7 @@ with fct as (
     select
         connection_id,
         snapshot_ts,
+        company_key,
         company_label,
         position,
         connected_on
@@ -22,15 +23,60 @@ with fct as (
 
 ),
 
+company_counts as (
+
+    /* Grouped by `company_key`, not by the raw label: `company_key` is the
+       conformed employer identity every other model already joins on, and it
+       folds case/whitespace variants together. Grouping by the raw text here
+       instead would split one employer across several bars and rank it below
+       its true size. */
+    select
+        snapshot_ts,
+        company_key,
+        count(*) as connection_count
+    from fct
+    group by snapshot_ts, company_key
+
+),
+
+company_display_labels as (
+
+    /* Which spelling to show for a key that has several. The variant the most
+       connections carry wins, alphabetical order breaking ties so the result
+       is deterministic. `max(company_label)` would sort alphabetically and so
+       could pick a lower-cased typo over the properly written name. */
+    select
+        snapshot_ts,
+        company_key,
+        company_label
+    from (
+        select
+            snapshot_ts,
+            company_key,
+            company_label,
+            row_number() over (
+                partition by snapshot_ts, company_key
+                order by count(*) desc, company_label asc
+            ) as label_rank
+        from fct
+        group by snapshot_ts, company_key, company_label
+    ) as ranked_labels
+    where label_rank = 1
+
+),
+
 by_company as (
 
     select
-        snapshot_ts,
+        company_counts.snapshot_ts,
         'company' as dimension_type,
-        company_label as dimension_value,
-        count(*) as connection_count
-    from fct
-    group by snapshot_ts, company_label
+        display_labels.company_label as dimension_value,
+        company_counts.connection_count
+    from company_counts
+    inner join company_display_labels as display_labels
+        on
+            company_counts.snapshot_ts = display_labels.snapshot_ts
+            and company_counts.company_key = display_labels.company_key
 
 ),
 
