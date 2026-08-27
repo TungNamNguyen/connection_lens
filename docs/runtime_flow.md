@@ -83,7 +83,7 @@ sequenceDiagram
 
 ## 2. Luồng A — Upload (trình duyệt → MinIO)
 
-Trang [`1_upload.py`](../streamlit_app/pages/1_upload.py), logic thuần nằm ở
+Trang [`1_Upload.py`](../streamlit_app/pages/1_Upload.py), logic thuần nằm ở
 [`upload_service.py`](../streamlit_app/upload_service.py).
 
 **Thứ tự là một hợp đồng, không phải sở thích:**
