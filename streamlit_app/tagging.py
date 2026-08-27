@@ -147,3 +147,165 @@ def tag_connection(position: str | None) -> list[str]:
 def format_tags(tags: list[str]) -> str:
     """Render tags for a table cell."""
     return ", ".join(tags) if tags else "—"
+
+
+# ---------------------------------------------------------------------------
+# Job families
+# ---------------------------------------------------------------------------
+# A second, *different* taxonomy over the same `position` text.
+#
+# Tags above answer "what can this person do for me?" and are multi-label — a
+# Director of Analytics is both `leadership` and `target_peer`. Families answer
+# "what job is this?" and are **single-label**: a distribution chart needs each
+# connection counted exactly once or the bars stop summing to the network.
+#
+# Order is the whole mechanism: the first matching family wins, so the list runs
+# most-specific first. "Senior Analytics Engineer" has to reach
+# `Analytics Engineering` before `Data Analytics` or `Software Engineering` can
+# claim it, and "Director Business Intelligence" has to reach
+# `Business Intelligence` before `Founder & Executive`.
+
+OTHER_FAMILY: Final = "Other"
+
+#: (family, keywords) in match order. Every keyword is matched on word
+#: boundaries, same as the tag lists above.
+JOB_FAMILY_RULES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("Analytics Engineering", ("analytics engineer", "analytic engineer", "dbt")),
+    (
+        "Data Engineering",
+        (
+            "data engineer", "data engineering", "big data", "etl", "elt",
+            "data platform", "data infrastructure", "data architect",
+            "data warehouse", "databricks", "data pipeline",
+        ),
+    ),
+    ("Data Science", ("data scientist", "data science", "statistician")),
+    (
+        "AI / Machine Learning",
+        (
+            "machine learning", "ml engineer", "ai engineer", "deep learning",
+            "nlp", "computer vision", "ai", "ml", "llm", "generative ai",
+        ),
+    ),
+    (
+        "Business Intelligence",
+        ("business intelligence", "bi", "power bi", "tableau", "looker", "qlik"),
+    ),
+    ("Business Analysis", ("business analyst", "business analysis", "ba")),
+    (
+        "Data Analytics",
+        (
+            "data analyst", "data analytics", "analytics", "analytics manager",
+            "insight analyst", "insights", "reporting analyst",
+            "reporting specialist",
+        ),
+    ),
+    (
+        "Talent & Recruiting",
+        (
+            "recruiter", "recruiting", "recruitment", "talent", "sourcer", "hr",
+            "human resources", "people operations", "people partner",
+        ),
+    ),
+    ("Product", ("product manager", "product owner", "product lead", "product")),
+    (
+        "Design",
+        ("designer", "design", "ux", "ui", "graphic", "creative", "art director"),
+    ),
+    (
+        # Before Software Engineering on purpose: "Network Engineer" and
+        # "Security Engineer" both contain "engineer" and would otherwise be
+        # swallowed by it.
+        "IT & Security",
+        (
+            "cyber security", "cybersecurity", "information security",
+            "infosec", "security analyst", "security engineer",
+            "it support", "information technology support", "help desk",
+            "helpdesk", "system administrator", "sysadmin", "systems engineer",
+            "network engineer", "technical support",
+        ),
+    ),
+    (
+        "Software Engineering",
+        (
+            "software engineer", "software", "developer", "development",
+            "engineer", "engineering", "programmer", "devops", "sre",
+            "backend", "back-end", "frontend", "front-end", "fullstack",
+            "full-stack", "architect", "qa", "tester", "quality assurance",
+        ),
+    ),
+    (
+        "Finance & Accounting",
+        (
+            "finance", "financial", "accountant", "accounting", "audit",
+            "auditor", "tax", "banking", "credit", "investment", "treasury",
+            "actuary", "actuarial",
+        ),
+    ),
+    (
+        "Sales & Marketing",
+        (
+            "sales", "marketing", "business development", "account manager",
+            "account executive", "growth", "seo", "brand", "advertising",
+            "customer success", "partnership",
+        ),
+    ),
+    ("Consulting", ("consultant", "consulting", "advisory", "advisor")),
+    (
+        "Academia & Study",
+        (
+            "student", "lecturer", "professor", "researcher", "research",
+            "phd", "teaching", "teacher", "university", "tutor",
+        ),
+    ),
+    (
+        "Operations & Delivery",
+        (
+            "operations", "operation", "supply chain", "logistics",
+            "project manager", "programme manager", "program manager",
+            "scrum", "agile", "delivery manager",
+        ),
+    ),
+    (
+        "Founder & Executive",
+        (
+            "founder", "co-founder", "cofounder", "ceo", "cto", "coo", "cfo",
+            "cio", "chief", "vp", "vice president", "president", "owner",
+            "managing director", "partner",
+        ),
+    ),
+)
+
+ALL_JOB_FAMILIES: Final[tuple[str, ...]] = (
+    *(family for family, _ in JOB_FAMILY_RULES),
+    OTHER_FAMILY,
+)
+
+_COMPILED_FAMILY_RULES: Final[tuple[tuple[str, tuple[re.Pattern[str], ...]], ...]] = (
+    tuple(
+        (
+            family,
+            tuple(
+                re.compile(rf"\b{re.escape(keyword)}\b", re.IGNORECASE)
+                for keyword in keywords
+            ),
+        )
+        for family, keywords in JOB_FAMILY_RULES
+    )
+)
+
+
+def job_family(position: str | None) -> str:
+    """Put a job title in exactly one family — the first rule that matches.
+
+    Returns `Other` for a blank title or one no rule claims, so every
+    connection lands in exactly one bucket and the families always sum to the
+    size of the network.
+    """
+    if not position or not position.strip():
+        return OTHER_FAMILY
+    text = position.strip()
+    for family, patterns in _COMPILED_FAMILY_RULES:
+        if any(pattern.search(text) for pattern in patterns):
+            return family
+    return OTHER_FAMILY

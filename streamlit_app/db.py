@@ -28,6 +28,13 @@ FCT_CONNECTION_SNAPSHOT = "gold.fct_connection_snapshot"
 MART_NETWORK_STATS = "mart.mart_network_stats"
 MART_NETWORK_BREAKDOWN = "mart.mart_network_breakdown"
 
+#: Silver labels a blank company/position this way rather than dropping the row
+#: (§17). The distribution charts leave it out: "no employer disclosed" is a
+#: data-quality fact — it belongs on that tab, not competing with real
+#: employers for the top of a ranking. The count is still surfaced next to the
+#: charts, so nothing is dropped silently.
+UNKNOWN_LABEL = "(unknown)"
+
 
 def warehouse_path() -> Path:
     """Absolute path of the DuckDB file, from configuration."""
@@ -140,7 +147,7 @@ def load_network_stats() -> pd.DataFrame:
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def load_breakdown(dimension_type: str, top_n: int = 15) -> pd.DataFrame:
-    """Top values of one distribution at the latest snapshot."""
+    """Top values of one distribution at the latest snapshot, `(unknown)` aside."""
     return safe_query(
         f"""
         select
@@ -149,12 +156,56 @@ def load_breakdown(dimension_type: str, top_n: int = 15) -> pd.DataFrame:
             share_pct
         from {MART_NETWORK_BREAKDOWN}
         where dimension_type = ?
+          and dimension_value <> ?
           and snapshot_ts = (select max(snapshot_ts) from {MART_NETWORK_BREAKDOWN})
         order by rank_within_dimension
         limit ?
         """,
-        [dimension_type, top_n],
+        [dimension_type, UNKNOWN_LABEL, top_n],
     )
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def count_breakdown_values(dimension_type: str) -> int:
+    """How many distinct values this dimension has, `(unknown)` aside.
+
+    Free-text company and job-title fields fragment hard — this is what tells
+    the reader whether "top 15" is most of the network or a sliver of it.
+    """
+    frame = safe_query(
+        f"""
+        select count(*) as distinct_values
+        from {MART_NETWORK_BREAKDOWN}
+        where dimension_type = ?
+          and dimension_value <> ?
+          and snapshot_ts = (select max(snapshot_ts) from {MART_NETWORK_BREAKDOWN})
+        """,
+        [dimension_type, UNKNOWN_LABEL],
+    )
+    return 0 if frame.empty else int(frame["distinct_values"].iloc[0])
+
+
+@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+def load_undisclosed_count(dimension_type: str) -> int:
+    """How many connections sit in this dimension's `(unknown)` bucket.
+
+    Read from the breakdown, deliberately, and not from
+    `mart_network_stats.connections_without_company`: that metric counts every
+    *Silver* row, restricted profiles included, and those never reach Gold at
+    all. Using it here would claim more rows were excluded from the chart than
+    the chart ever had.
+    """
+    frame = safe_query(
+        f"""
+        select connection_count
+        from {MART_NETWORK_BREAKDOWN}
+        where dimension_type = ?
+          and dimension_value = ?
+          and snapshot_ts = (select max(snapshot_ts) from {MART_NETWORK_BREAKDOWN})
+        """,
+        [dimension_type, UNKNOWN_LABEL],
+    )
+    return 0 if frame.empty else int(frame["connection_count"].iloc[0])
 
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
@@ -190,6 +241,7 @@ def load_current_connections() -> pd.DataFrame:
             dim.last_name,
             dim.email_address,
             dim.company,
+            dim.company_key,
             company_dim.company_name,
             company_dim.current_connection_count as company_connection_count,
             dim.position,
@@ -206,30 +258,50 @@ def load_current_connections() -> pd.DataFrame:
 
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
 def load_recent_changes(limit: int = 25) -> pd.DataFrame:
-    """Connections whose company/title changed most recently, newest first."""
+    """Connections whose company/title changed most recently, newest first.
+
+    Returns the version they moved *from* alongside the one they are on now.
+    "Senior Analyst at Acme" only becomes a warm-intro signal once you can see
+    it used to read "Analyst at Globex" — the move is the information, not the
+    destination.
+
+    The previous version is the SCD2 row immediately before the open one, found
+    by rank rather than by joining `dbt_valid_to` to `dbt_valid_from`: those
+    timestamps are equal in practice, but ranking states the intent and cannot
+    be broken by a re-run that rewrites them.
+    """
     return safe_query(
         f"""
         with versions as (
 
             select
                 connection_id,
-                count(*) as version_count
+                full_name,
+                company,
+                position,
+                dbt_valid_from,
+                dbt_valid_to,
+                row_number() over (
+                    partition by connection_id order by dbt_valid_from desc
+                ) as version_rank
             from {DIM_CONNECTION}
-            group by connection_id
 
         )
 
         select
-            dim.full_name,
-            dim.company,
-            dim.position,
-            dim.dbt_valid_from as changed_at,
-            dim.connection_id
-        from {DIM_CONNECTION} as dim
-        inner join versions on dim.connection_id = versions.connection_id
-        where dim.dbt_valid_to is null
-          and versions.version_count > 1
-        order by dim.dbt_valid_from desc
+            current_version.full_name,
+            previous_version.company as previous_company,
+            previous_version.position as previous_position,
+            current_version.company,
+            current_version.position,
+            current_version.dbt_valid_from as changed_at,
+            current_version.connection_id
+        from versions as current_version
+        inner join versions as previous_version
+            on current_version.connection_id = previous_version.connection_id
+            and previous_version.version_rank = current_version.version_rank + 1
+        where current_version.dbt_valid_to is null
+        order by current_version.dbt_valid_from desc
         limit ?
         """,
         [limit],

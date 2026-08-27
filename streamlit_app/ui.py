@@ -13,16 +13,23 @@ import streamlit as st
 from common.errors import ConnectionLensError
 from common.minio_client import LandingZoneClient, LandingZoneStatus
 from common.settings import get_settings
+from streamlit_app.theme import inject_css
 
 PAGE_ICON = "🔗"
 APP_TITLE = "Connection Lens"
 
 
 def configure_page(subtitle: str, *, layout: str = "wide") -> None:
-    """Apply the shared page config and header."""
+    """Apply the shared page config and stylesheet.
+
+    Call it as the first Streamlit call on every page: `st.set_page_config()`
+    has to come before anything else renders, and the stylesheet has to be in
+    place before the first element it styles.
+    """
     st.set_page_config(
         page_title=f"{APP_TITLE} — {subtitle}", page_icon=PAGE_ICON, layout=layout
     )
+    inject_css()
 
 
 #: Vietnamese "đ" is a letter in its own right, not an accented "d", so NFD
@@ -77,6 +84,32 @@ def format_date(value: object) -> str:
     except (ValueError, TypeError):
         return "—"
     return "—" if pd.isna(stamp) else stamp.strftime("%Y-%m-%d")
+
+
+def _text_or_dash(value: object) -> str:
+    """A trimmed string, or an em dash for anything missing/blank."""
+    if value is None:
+        return "—"
+    try:
+        if pd.isna(value):  # type: ignore[arg-type]
+            return "—"
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip() or "—"
+
+
+def format_change(previous: object, current: object) -> str:
+    """Render `old → new` when a value moved, or the value alone when it did not.
+
+    A connection can change company, title, or both in the same export. Putting
+    an arrow on the field that did not move would invent a change that never
+    happened, so an unchanged value is rendered plainly.
+    """
+    previous_text = _text_or_dash(previous)
+    current_text = _text_or_dash(current)
+    if previous_text == current_text:
+        return current_text
+    return f"{previous_text} → {current_text}"
 
 
 def format_duration(seconds: float | None) -> str:

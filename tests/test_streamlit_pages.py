@@ -22,10 +22,10 @@ from streamlit_app.auth import SESSION_USER_KEY
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PAGES = [
     "streamlit_app/app.py",
-    "streamlit_app/pages/1_upload.py",
-    "streamlit_app/pages/2_network_stats.py",
-    "streamlit_app/pages/3_job_search.py",
-    "streamlit_app/pages/4_job_management.py",
+    "streamlit_app/pages/1_Upload.py",
+    "streamlit_app/pages/2_Network_Stats.py",
+    "streamlit_app/pages/3_Job_Search.py",
+    "streamlit_app/pages/4_Job_Management.py",
 ]
 
 RUN_TIMEOUT_SECONDS = 30
@@ -111,8 +111,8 @@ def built_warehouse(monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.mark.parametrize(
     "path",
-    ["streamlit_app/app.py", "streamlit_app/pages/2_network_stats.py",
-     "streamlit_app/pages/3_job_search.py"],
+    ["streamlit_app/app.py", "streamlit_app/pages/2_Network_Stats.py",
+     "streamlit_app/pages/3_Job_Search.py"],
 )
 def test_pages_render_with_data(path: str, built_warehouse: Path) -> None:
     app = run_page(path)
@@ -121,8 +121,8 @@ def test_pages_render_with_data(path: str, built_warehouse: Path) -> None:
 
 def test_job_search_ranks_without_any_configuration(built_warehouse: Path) -> None:
     """No target company to type: the ranking is meaningful on arrival."""
-    app = run_page("streamlit_app/pages/3_job_search.py")
-    assert_no_exception(app, "3_job_search.py")
+    app = run_page("streamlit_app/pages/3_Job_Search.py")
+    assert_no_exception(app, "3_Job_Search.py")
 
     labels = {item.label for item in app.text_input}
     assert "Target company" not in labels, "the target company input was removed"
@@ -135,14 +135,14 @@ def test_job_search_ranks_without_any_configuration(built_warehouse: Path) -> No
 
 def test_job_search_can_search_names_and_positions(built_warehouse: Path) -> None:
     """One box over both fields — you either remember the person or the job."""
-    app = run_page("streamlit_app/pages/3_job_search.py")
+    app = run_page("streamlit_app/pages/3_Job_Search.py")
     before = len(app.dataframe[0].value)
 
     search = next(
         item for item in app.text_input if item.label == "Name or position contains"
     )
     search.set_value("engineer").run()
-    assert_no_exception(app, "3_job_search.py (searched)")
+    assert_no_exception(app, "3_Job_Search.py (searched)")
 
     table = app.dataframe[0].value
     assert 0 < len(table) < before
@@ -151,12 +151,12 @@ def test_job_search_can_search_names_and_positions(built_warehouse: Path) -> Non
 
 
 def test_job_search_company_filter_narrows_the_table(built_warehouse: Path) -> None:
-    app = run_page("streamlit_app/pages/3_job_search.py")
+    app = run_page("streamlit_app/pages/3_Job_Search.py")
     before = len(app.dataframe[0].value)
 
     company = next(item for item in app.text_input if item.label == "Company contains")
     company.set_value("acme").run()
-    assert_no_exception(app, "3_job_search.py (filtered)")
+    assert_no_exception(app, "3_Job_Search.py (filtered)")
     assert len(app.dataframe[0].value) < before
 
 
@@ -175,8 +175,8 @@ def test_airflow_link_points_at_the_browser_url(
     get_settings.cache_clear()
     db.clear_caches()
     try:
-        app = run_page("streamlit_app/pages/4_job_management.py")
-        assert_no_exception(app, "4_job_management.py")
+        app = run_page("streamlit_app/pages/4_Job_Management.py")
+        assert_no_exception(app, "4_Job_Management.py")
 
         rendered = " ".join(str(item.value) for item in app.markdown)
         assert "http://localhost:8080/dags/ingest_connections" in rendered
@@ -203,8 +203,8 @@ def test_upload_page_survives_an_unreachable_minio(
     db.clear_caches()
     st.cache_resource.clear()
     try:
-        app = run_page("streamlit_app/pages/1_upload.py")
-        assert_no_exception(app, "1_upload.py (MinIO down)")
+        app = run_page("streamlit_app/pages/1_Upload.py")
+        assert_no_exception(app, "1_Upload.py (MinIO down)")
         assert app.error, "the page must tell the owner the landing zone is unavailable"
         assert "Landing zone unavailable" in app.error[0].value
     finally:

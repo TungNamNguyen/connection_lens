@@ -8,7 +8,13 @@ from __future__ import annotations
 
 import pytest
 
-from streamlit_app.ui import display_profile_url, fold_accents, format_date, format_duration
+from streamlit_app.ui import (
+    display_profile_url,
+    fold_accents,
+    format_change,
+    format_date,
+    format_duration,
+)
 
 
 # --- accent-blind search ---------------------------------------------------
@@ -54,3 +60,19 @@ def test_format_duration() -> None:
     assert format_duration(70) == "1m 10s"
     assert format_duration(9) == "9s"
     assert format_duration(None) == "—"
+
+
+# --- old → new rendering ---------------------------------------------------
+def test_format_change_shows_an_arrow_only_when_the_value_moved() -> None:
+    assert format_change("Globex", "Acme Bank") == "Globex → Acme Bank"
+    # A connection can change company without changing title (and vice versa);
+    # an arrow on the field that stayed put would invent a change.
+    assert format_change("Data Analyst", "Data Analyst") == "Data Analyst"
+
+
+def test_format_change_tolerates_a_missing_side() -> None:
+    """`company` is nullable — LinkedIn omits it when the profile hides it."""
+    assert format_change(None, "Acme Bank") == "— → Acme Bank"
+    assert format_change("Acme Bank", None) == "Acme Bank → —"
+    assert format_change(None, None) == "—"
+    assert format_change("  ", "Acme Bank") == "— → Acme Bank"
