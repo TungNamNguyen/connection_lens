@@ -240,6 +240,10 @@ services:
       - ./streamlit_app:/opt/connection_lens/streamlit_app:ro
       - ./common:/opt/connection_lens/common:ro
       - ./data:/opt/connection_lens/data:ro
+      # The app theme (§ `.streamlit/config.toml`). Streamlit resolves it
+      # relative to the working directory, so without this mount the container
+      # renders with Streamlit's stock colours while the host renders themed.
+      - ./.streamlit:/opt/connection_lens/.streamlit:ro
     ports:
       - "8501:8501"
     user: "${AIRFLOW_UID:-1000}:0"
