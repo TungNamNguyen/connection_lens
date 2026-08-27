@@ -1,0 +1,102 @@
+# Connection Lens — app theme.
+#
+# Every colour here comes from the same validated palette as the charts
+# (`streamlit_app/charts.py`): the chrome and the data ink are one system, so a
+# blue in a chart is the same blue as a primary button. Light and dark are both
+# *selected* — the dark steps were chosen for the dark surface, never derived by
+# inverting the light ones.
+#
+# Nothing in this file is a secret, and it holds no data: it is safe to commit.
+
+[server]
+# Inotify events from a host bind mount do not reach the container, so
+# Streamlit's default watcher never notices an edited module: it re-runs the
+# page script while `streamlit_app.db` and friends stay cached in `sys.modules`,
+# and the page dies on an attribute that exists on disk. Polling is a few
+# stat() calls a second on a project this size, and it makes the container
+# behave like a local run.
+fileWatcherType = "poll"
+
+[theme]
+font = "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif"
+codeFont = "'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, 'Liberation Mono', monospace"
+
+# 15px root instead of 16: this is a dashboard, and the extra line of data on
+# screen is worth more than the extra point of size.
+baseFontSize = 15
+
+# Streamlit's default h1/h2 (2.75rem / 2.25rem) are sized for a landing page and
+# dwarf the metrics underneath them. These are sized for a page of panels.
+headingFontSizes = ["2rem", "1.5rem", "1.15rem", "1rem", "0.9rem", "0.8rem"]
+headingFontWeights = [700, 650, 600, 600, 600, 600]
+metricValueFontSize = "1.9rem"
+
+baseRadius = "medium"
+buttonRadius = "medium"
+showWidgetBorder = true
+showSidebarBorder = true
+linkUnderline = false
+
+# --- Light -----------------------------------------------------------------
+[theme.light]
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f4f4f5"
+textColor = "#0b0b0b"
+borderColor = "#e4e4e7"
+primaryColor = "#2a78d6"
+linkColor = "#256abf"
+codeBackgroundColor = "#f4f4f5"
+codeTextColor = "#184f95"
+dataframeHeaderBackgroundColor = "#fafafa"
+dataframeBorderColor = "#e4e4e7"
+
+# Slots 1–4 of the categorical palette, in validated order. Only native
+# (`st.line_chart`-style) charts read these; the Altair builders name their
+# colours explicitly. Kept in sync so the two can never drift.
+chartCategoricalColors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100"]
+chartSequentialColors = [
+    "#cde2fb", "#b7d3f6", "#9ec5f4", "#86b6ef", "#6da7ec",
+    "#5598e7", "#3987e5", "#2a78d6", "#256abf", "#1c5cab",
+]
+# Exactly 10 stops: Streamlit interpolates the midpoint itself and rejects an
+# odd count outright, silently falling back to its own colours. The pale ends
+# of each arm meet in the middle, so the crossover still reads as "neither".
+chartDivergingColors = [
+    "#104281", "#1c5cab", "#2a78d6", "#6da7ec", "#b7d3f6",
+    "#f5b3b2", "#ec8382", "#e34948", "#c22f2e", "#8f2322",
+]
+
+[theme.light.sidebar]
+backgroundColor = "#fafafa"
+secondaryBackgroundColor = "#f0f0f1"
+borderColor = "#e4e4e7"
+codeBackgroundColor = "#f0f0f1"
+
+# --- Dark ------------------------------------------------------------------
+[theme.dark]
+backgroundColor = "#1a1a19"
+secondaryBackgroundColor = "#232322"
+textColor = "#ffffff"
+borderColor = "#33332f"
+primaryColor = "#3987e5"
+linkColor = "#6da7ec"
+codeBackgroundColor = "#232322"
+codeTextColor = "#9ec5f4"
+dataframeHeaderBackgroundColor = "#232322"
+dataframeBorderColor = "#33332f"
+
+chartCategoricalColors = ["#3987e5", "#d95926", "#199e70", "#c98500"]
+chartSequentialColors = [
+    "#0d366b", "#104281", "#184f95", "#1c5cab", "#256abf",
+    "#2a78d6", "#3987e5", "#5598e7", "#6da7ec", "#86b6ef",
+]
+chartDivergingColors = [
+    "#b7d3f6", "#86b6ef", "#5598e7", "#3987e5", "#256abf",
+    "#c22f2e", "#e34948", "#e66767", "#ec8382", "#f5b3b2",
+]
+
+[theme.dark.sidebar]
+backgroundColor = "#141413"
+secondaryBackgroundColor = "#232322"
+borderColor = "#2b2b28"
+codeBackgroundColor = "#232322"
