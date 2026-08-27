@@ -97,15 +97,22 @@ def require_login() -> None:
 
 def _render_login_form(settings: Settings) -> None:
     """The sign-in screen shown in place of the requested page."""
-    _, middle, _ = st.columns([1, 2, 1])
-    with middle:
-        st.title(f"🔗 {APP_TITLE}")
-        st.caption("Sign in to reach your network data.")
+    _, middle, _ = st.columns([1, 1.3, 1])
+    with middle, st.container(border=True):
+        st.markdown(f"### 🔗 {APP_TITLE}")
+        st.caption(
+            "Sign in to reach your network data. Everything stays on this "
+            "machine."
+        )
 
-        with st.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Sign in", type="primary")
+        with st.form("login_form", border=False):
+            username = st.text_input("Username", placeholder="owner")
+            password = st.text_input(
+                "Password", type="password", placeholder="from your `.env`"
+            )
+            submitted = st.form_submit_button(
+                "Sign in", type="primary", use_container_width=True
+            )
 
         if submitted:
             if verify_credentials(
@@ -125,7 +132,12 @@ def _render_account_controls() -> None:
     """Who is signed in, plus the way out, at the top of the sidebar."""
     with st.sidebar:
         st.caption(f"Signed in as **{current_user()}**")
-        if st.button("Sign out", key="sign_out", use_container_width=True):
+        if st.button(
+            "Sign out",
+            key="sign_out",
+            icon=":material/logout:",
+            use_container_width=True,
+        ):
             st.session_state.pop(SESSION_USER_KEY, None)
             st.rerun()
         st.divider()
