@@ -588,14 +588,22 @@ Tab Upload **không bao giờ** kích ingestion — việc đó thuộc về Job
 `minio_status`), `auth.py` (`require_login()` — chặn cả 4 tab, fail closed khi
 `STREAMLIT_AUTH_*` chưa cấu hình).
 
+Phần nhìn chia làm hai tầng. `.streamlit/config.toml` giữ **design token** —
+màu, bo góc, font, thang heading, cho cả light lẫn dark — vì token sống sót qua
+các bản nâng cấp Streamlit, còn CSS nhắm vào class nội bộ thì không.
+`theme.py` chỉ lo phần token không diễn đạt được (`page_header`, `section`,
+status pill, tag pill) và **sinh stylesheet từ chính `charts.Palette`**, nên màu
+xanh của nút luôn là màu xanh của chart. Mọi selector trong đó chỉ là trang trí:
+Streamlit đổi tên class thì trang vẫn đọc được bình thường.
+
 ### 6.3 Bốn trang
 
 | File | Vai trò |
 | --- | --- |
-| `pages/1_upload.py` | Validate + hash + đẩy lên MinIO. Không trigger. |
-| `pages/2_network_stats.py` | Chart read-only từ `mart_network_stats` / `mart_network_breakdown` |
-| `pages/3_job_search.py` | Bảng lọc/sắp xếp toàn bộ connection hiện tại, xếp hạng theo **referral strength** (không cần nhập gì) |
-| `pages/4_job_management.py` | Nút trigger + bảng lịch sử run + viewer log, qua Airflow REST |
+| `pages/1_Upload.py` | Validate + hash + đẩy lên MinIO. Không trigger. |
+| `pages/2_Network_Stats.py` | Chart read-only từ `mart_network_stats` / `mart_network_breakdown` |
+| `pages/3_Job_Search.py` | Bảng lọc/sắp xếp toàn bộ connection hiện tại, xếp hạng theo **referral strength** (không cần nhập gì) |
+| `pages/4_Job_Management.py` | Nút trigger + bảng lịch sử run + viewer log, qua Airflow REST |
 
 `app.py` là entrypoint: vá `sys.path`, `require_login()`, hiển thị trạng thái ba
 thành phần (warehouse / MinIO / Airflow).
