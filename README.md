@@ -119,6 +119,8 @@ connection_lens/
 ├── great_expectations/checkpoints/bronze_to_silver.py
 ├── services/minio_event_listener/main.py
 ├── streamlit_app/                # app.py + pages/ + auth.py + scoring.py + tagging.py + db.py
+│                                 # + theme.py / charts.py — one visual system for chrome and charts
+├── .streamlit/config.toml        # app theme: colours, radii, fonts, heading scale
 ├── scripts/                      # CI fixture builder, SCD2 behaviour assertions
 ├── tests/                        # pytest, synthetic fixtures only
 ├── docker/                       # Dockerfiles for Airflow, Streamlit, listener
