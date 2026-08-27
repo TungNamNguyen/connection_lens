@@ -15,6 +15,7 @@ with fct as (
         snapshot_sequence,
         previous_snapshot_ts,
         company_key,
+        company_label,
         has_email,
         is_new_since_previous_snapshot
     from {{ ref('fct_connection_snapshot') }}
@@ -29,7 +30,13 @@ per_snapshot as (
         min(snapshot_sequence) as snapshot_sequence,
         min(previous_snapshot_ts) as previous_snapshot_ts,
         cast(count(*) as integer) as total_connections,
-        cast(count(distinct company_key) as integer) as distinct_companies,
+        /* `(unknown)` is Silver's label for "no employer disclosed" and it
+           carries a `company_key` like any other value, so counting keys
+           blindly would report it as one more employer. It is a data-quality
+           fact, reported as `connections_without_company` below. */
+        cast(count(distinct case
+            when company_label <> '(unknown)' then company_key
+        end) as integer) as distinct_companies,
         cast(sum(case when has_email then 1 else 0 end) as integer)
             as connections_with_email,
         cast(sum(case when is_new_since_previous_snapshot then 1 else 0 end) as integer)
