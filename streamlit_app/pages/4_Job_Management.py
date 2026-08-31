@@ -67,7 +67,7 @@ with airflow_card, st.container(border=True):
 with dag_card, st.container(border=True):
     st.markdown("**DAG**")
     st.markdown(status_pill(settings.airflow_dag_id, "idle"), unsafe_allow_html=True)
-    st.caption("`max_active_runs=1` — runs are serialised for DuckDB.")
+    st.caption("Runs are serialised — one at a time.")
 
 with link_card, st.container(border=True):
     st.markdown("**Airflow UI**")
@@ -107,6 +107,9 @@ section(
 )
 
 pending_count = 0
+# This is the one page you are most likely to be on *during* a run, so it never
+# halts on a locked warehouse — it just says which number it cannot compute.
+warehouse_busy = db.warehouse_status()["busy"]
 try:
     objects = landing_zone_client().list_landing_objects()
     ingested_short = {value[:8] for value in db.bronze_file_hashes()}
@@ -115,6 +118,12 @@ try:
 except ConnectionLensError as error:
     st.caption(f"Could not read the landing zone: {error}")
     pending = []
+
+if warehouse_busy:
+    st.caption(
+        "Ingestion is running — Bronze cannot be read, so everything in the "
+        "landing zone counts as pending until it finishes."
+    )
 
 pending_columns = st.columns([1, 3], gap="medium")
 pending_columns[0].metric(
@@ -172,15 +181,10 @@ with trigger_columns[0]:
 with trigger_columns[1]:
     st.markdown(
         """
-The DAG behaves identically no matter what starts it:
+The run scans the landing zone for content not yet in Bronze, so triggering
+with nothing pending is a safe no-op.
 
-1. **Airflow UI** — the native *Trigger DAG* button;
-2. **MinIO bucket event** — the listener service turns an `s3:ObjectCreated:*`
-   notification into this same API call;
-3. **this button**.
-
-It always scans MinIO for content hashes not yet in Bronze, so a redundant or
-overlapping trigger is a safe no-op, never a duplicate write.
+The Airflow UI and MinIO bucket events start the same run.
         """
     )
 

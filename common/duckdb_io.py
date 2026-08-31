@@ -20,7 +20,7 @@ from pathlib import Path
 import duckdb
 import pandas as pd
 
-from common.errors import WarehouseNotReadyError
+from common.errors import WarehouseBusyError, WarehouseNotReadyError
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,15 @@ def connect_read_only(path: str | Path) -> Iterator[duckdb.DuckDBPyConnection]:
             f"No warehouse at {target}. Upload an export and run the ingestion "
             "DAG before querying."
         )
-    connection = duckdb.connect(str(target), read_only=True)
+    try:
+        connection = duckdb.connect(str(target), read_only=True)
+    except duckdb.IOException as error:
+        # DuckDB refuses the *connection*, not the query, while another process
+        # holds the file read-write — so this is the one place that can catch it.
+        raise WarehouseBusyError(
+            f"The warehouse at {target} is locked by the ingestion DAG. "
+            "Reads resume as soon as the run finishes."
+        ) from error
     try:
         yield connection
     finally:

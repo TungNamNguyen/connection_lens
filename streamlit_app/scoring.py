@@ -22,6 +22,7 @@ Two things are deliberately **not** scored:
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Final
@@ -105,6 +106,19 @@ def role_points(weights: ReferralWeights) -> dict[str, int]:
         TARGET_PEER: weights.role_peer,
         ENGINEERING: weights.role_engineering,
     }
+
+
+#: How each score component reads in the UI, in the order they are reported.
+#: Keys match :attr:`ScoreBreakdown.components`, so a weight that is never
+#: earned still shows up — with a count of zero, which is the useful part.
+SIGNAL_LABELS: Final[dict[str, str]] = {
+    "role": "Strongest role tag",
+    "second_role": "A second role tag",
+    "seniority": "Seniority in the title",
+    "recent_connection": "Connected recently",
+    "email": "Email in the export",
+    "early_career": "Early career (penalty)",
+}
 
 
 ROLE_REASONS: Final[dict[str, str]] = {
@@ -208,6 +222,29 @@ def score_referral(
     )
 
 
+def _breakdowns(
+    frame: pd.DataFrame,
+    weights: ReferralWeights,
+    today: date | None,
+    company_column: str,
+    position_column: str,
+    connected_on_column: str,
+    email_column: str,
+) -> list[ScoreBreakdown]:
+    """Score every row of a connections table, keeping the full breakdowns."""
+    return [
+        score_referral(
+            company=row.get(company_column),
+            position=row.get(position_column),
+            connected_on=row.get(connected_on_column),
+            has_email=bool(pd.notna(row.get(email_column)) and row.get(email_column)),
+            weights=weights,
+            today=today,
+        )
+        for _, row in frame.iterrows()
+    ]
+
+
 def score_connections(
     frame: pd.DataFrame,
     weights: ReferralWeights = DEFAULT_WEIGHTS,
@@ -225,17 +262,64 @@ def score_connections(
         scored["score_reason"] = pd.Series(dtype="object")
         return scored
 
-    breakdowns = [
-        score_referral(
-            company=row.get(company_column),
-            position=row.get(position_column),
-            connected_on=row.get(connected_on_column),
-            has_email=bool(pd.notna(row.get(email_column)) and row.get(email_column)),
-            weights=weights,
-            today=today,
-        )
-        for _, row in scored.iterrows()
-    ]
+    breakdowns = _breakdowns(
+        scored,
+        weights,
+        today,
+        company_column,
+        position_column,
+        connected_on_column,
+        email_column,
+    )
     scored["score"] = [breakdown.total for breakdown in breakdowns]
     scored["score_reason"] = [breakdown.reason_text for breakdown in breakdowns]
     return scored
+
+
+def signal_frequency(
+    frame: pd.DataFrame,
+    weights: ReferralWeights = DEFAULT_WEIGHTS,
+    *,
+    today: date | None = None,
+    company_column: str = "company",
+    position_column: str = "position",
+    connected_on_column: str = "connected_on",
+    email_column: str = "email_address",
+) -> pd.DataFrame:
+    """How many connections each scoring signal fires for.
+
+    Answers "what is actually driving this ranking?". A weight that fires for
+    almost everyone separates nobody, and one that fires for almost no one is
+    not earning its place — both are invisible in the scores themselves, and
+    the weights are still an open question (§15).
+
+    Returns one row per signal in :data:`SIGNAL_LABELS`, zero counts included.
+    """
+    empty = pd.DataFrame(
+        {
+            "signal": pd.Series(dtype="object"),
+            "connections": pd.Series(dtype="int64"),
+        }
+    )
+    if frame.empty:
+        return empty
+
+    counts: Counter[str] = Counter()
+    for breakdown in _breakdowns(
+        frame,
+        weights,
+        today,
+        company_column,
+        position_column,
+        connected_on_column,
+        email_column,
+    ):
+        # Keys only: this counts *how many connections* a signal fired for,
+        # never the points it awarded them.
+        counts.update(breakdown.components.keys())
+    return pd.DataFrame(
+        [
+            {"signal": label, "connections": counts.get(key, 0)}
+            for key, label in SIGNAL_LABELS.items()
+        ]
+    )

@@ -163,8 +163,27 @@ def render_sidebar_footer() -> None:
         st.divider()
 
 
+#: Shown wherever a panel would otherwise read as "no data" while the writer
+#: holds the file. The distinction matters: one means nothing was ever
+#: ingested, the other means it cannot be read for the next few seconds.
+BUSY_NOTICE = (
+    "**Ingestion is running.** The warehouse is locked by the DAG while it "
+    "writes, so nothing can be read from it right now. Reload the page once "
+    "the run finishes — Job Management shows its progress."
+)
+
+
+def halt_if_busy(status: dict[str, bool]) -> None:
+    """Stop the page while an ingestion run holds DuckDB's writer lock (§10)."""
+    if not status.get("busy"):
+        return
+    st.info(BUSY_NOTICE, icon="⏳")
+    st.stop()
+
+
 def require_warehouse(status: dict[str, bool], layer: str, hint: str) -> None:
     """Stop the page with a helpful message when a warehouse layer is missing."""
+    halt_if_busy(status)
     if status.get(layer):
         return
     st.info(

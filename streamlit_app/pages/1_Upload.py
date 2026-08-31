@@ -50,6 +50,18 @@ else:
     render_status_pill("Bucket not created yet", "warn")
     st.caption(landing_zone.detail)
 
+# Uploading is a MinIO operation and works throughout an ingestion run; only
+# the duplicate check needs Bronze, which is locked while the DAG writes. Say
+# so rather than letting a known file be announced as new.
+warehouse_busy = db.warehouse_status()["busy"]
+if warehouse_busy:
+    st.warning(
+        "**Ingestion is running**, so the warehouse cannot be read to check "
+        "for duplicates. Uploading still works, and the DAG checks the content "
+        "hash again before it ingests anything.",
+        icon="⏳",
+    )
+
 with st.container(border=True):
     uploaded = st.file_uploader(
         "Connections.csv",
@@ -94,12 +106,17 @@ else:
         prepared.file_hash[:12] + "…",
         icon=":material/fingerprint:",
         border=True,
-        help="Idempotency is decided by this hash against Bronze — never by "
-        "date, upload time or which trigger fired the run.",
+        help="Duplicate detection compares this hash against Bronze.",
     )
 
-    is_duplicate = db.is_hash_in_bronze(prepared.file_hash)
-    if is_duplicate:
+    is_duplicate = not warehouse_busy and db.is_hash_in_bronze(prepared.file_hash)
+    if warehouse_busy:
+        st.info(
+            "Whether this content is already in Bronze cannot be checked until "
+            "the run finishes.",
+            icon="⏳",
+        )
+    elif is_duplicate:
         st.warning(
             "**Duplicate content.** This exact file is already in Bronze, so no "
             "new dataset will be created. It will still be uploaded to MinIO — "
@@ -125,9 +142,8 @@ else:
             st.success(result.message, icon="📦")
             st.code(result.object_key, language="text")
             st.caption(
-                "This tab does not start ingestion. Open **Job Management** to "
-                "trigger the DAG, or let the MinIO bucket event do it if the "
-                "listener service is running."
+                "Uploading does not start ingestion — trigger the DAG from "
+                "**Job Management**."
             )
             db.clear_caches()
 
@@ -146,6 +162,14 @@ except ConnectionLensError as error:
 
 ingested_hashes = db.bronze_file_hashes()
 short_ingested = {value[:8] for value in ingested_hashes}
+if warehouse_busy:
+    # With Bronze unreadable every object reads as "never ingested", which is
+    # the safe direction to be wrong in — it over-warns before a deletion
+    # rather than under-warning — but it still has to be said out loud.
+    st.caption(
+        "Ingestion is running, so the “in Bronze” column below cannot be "
+        "trusted until it finishes."
+    )
 
 if not objects:
     st.caption("No exports uploaded yet.")
@@ -174,10 +198,8 @@ else:
         "Delete an object from the landing zone", icon=":material/delete:"
     ):
         st.caption(
-            "The landing zone is normally kept as a complete upload audit "
-            "trail, so deleting is deliberate and permanent: every version of "
-            "the object goes. Bronze is never touched — an export that has "
-            "already been ingested stays in the warehouse either way."
+            "Deleting is permanent: every version of the object goes. Bronze "
+            "is never touched."
         )
         labels = {
             f"{obj.key.rsplit('/', 1)[-1]}  ·  {format_timestamp(obj.snapshot_ts)}"

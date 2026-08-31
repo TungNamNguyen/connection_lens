@@ -229,7 +229,7 @@ st.dataframe(
     column_config={
         "Name": st.column_config.TextColumn("Name", pinned=True),
         "Tags": st.column_config.ListColumn(
-            "Tags", help="Derived from the job title by `tagging.py`."
+            "Tags", help="Derived from the job title."
         ),
         "Profile": st.column_config.LinkColumn(
             "Profile", display_text="Open ↗", width="small"
@@ -237,20 +237,13 @@ st.dataframe(
         "Why": st.column_config.TextColumn("Why", width="medium"),
         "Score": st.column_config.ProgressColumn(
             "Referral strength",
-            help="How strong a referral this person could give — see the "
-            "breakdown below the table.",
+            help="How strong a referral this person could give.",
             min_value=0,
             max_value=DEFAULT_WEIGHTS.maximum,
             format="%d",
         ),
     },
     row_height=34,
-)
-
-st.caption(
-    "**Referral strength** ranks who could realistically get your CV in front "
-    "of someone. It scores the person, so it is useful before you have a "
-    "target company in mind — naming one adds the largest single term."
 )
 
 st.download_button(
@@ -317,10 +310,7 @@ with st.container(border=True):
                 ),
             },
         )
-        st.caption(
-            "`old → new` marks the field that moved; a field shown plainly did "
-            "not change in that export."
-        )
+        st.caption("`old → new` marks the field that moved.")
 
 with st.container(border=True):
     section("No longer in the network")
@@ -349,10 +339,7 @@ with st.container(border=True):
                 ),
             },
         )
-        st.caption(
-            "Only the fact and the date are recorded. LinkedIn's export gives "
-            "no signal for *why* someone disappeared, so none is guessed."
-        )
+        st.caption("Only the fact and the date are recorded — never a reason.")
 
 with st.expander("How referral strength is scored", icon=":material/calculate:"):
     st.markdown(
@@ -378,12 +365,8 @@ Only the strongest role tag scores; a second one adds a little rather than
 doubling. Someone with **no employer in the export scores 0** — there is
 nowhere for them to refer you. Maximum **{DEFAULT_WEIGHTS.maximum}**.
 
-**Not scored: how recently they changed job.** That needs several ingested
-exports before it means anything. Recent moves are shown in their own panel
-above instead.
-
-The weights live in one dataclass in `streamlit_app/scoring.py`, and the
-**Why** column always shows which of them fired.
+**Not scored: how recently they changed job.** Recent moves are shown in their
+own panel above instead. The **Why** column shows which signals fired.
         """
     )
 
