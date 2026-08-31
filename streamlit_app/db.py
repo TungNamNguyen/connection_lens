@@ -15,7 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from common.duckdb_io import BRONZE_RELATION, connect_read_only
-from common.errors import WarehouseNotReadyError
+from common.errors import WarehouseBusyError, WarehouseNotReadyError
 from common.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -54,37 +54,61 @@ def _empty() -> pd.DataFrame:
 def safe_query(sql: str, params: list | None = None) -> pd.DataFrame:
     """Run a query, returning an empty frame when the warehouse is not built yet.
 
-    Missing relations are expected before the first DAG run; anything else is
-    re-raised so real errors stay loud.
+    Missing relations are expected before the first DAG run, and a locked file
+    is expected for as long as one is running; anything else is re-raised so
+    real errors stay loud.
+
+    Callers that render a panel should ask `warehouse_status()` whether the
+    warehouse is busy first — an empty frame on its own cannot tell "nothing
+    ingested yet" apart from "cannot read right now".
     """
     try:
         return query(sql, params)
     except WarehouseNotReadyError:
+        return _empty()
+    except WarehouseBusyError as error:
+        logger.info("%s", error)
         return _empty()
     except duckdb.CatalogException as error:
         logger.info("Relation not available yet: %s", error)
         return _empty()
 
 
-@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner=False)
+#: Deliberately **not** cached, unlike every query below. This is the probe the
+#: pages branch on, so a stale answer is worse than a cheap repeat: a cached
+#: `busy` would keep the whole app behind a "run in progress" notice for the
+#: rest of the TTL after the DAG had already finished. One connect plus one
+#: catalogue lookup on a local file is a millisecond.
 def warehouse_status() -> dict[str, bool]:
-    """Which layers exist, for the app's status banners."""
+    """Which layers exist, and whether the warehouse can be read at all."""
     path = warehouse_path()
+    absent = {
+        "warehouse": False,
+        "bronze": False,
+        "gold": False,
+        "marts": False,
+        "busy": False,
+    }
     if not path.exists():
-        return {"warehouse": False, "bronze": False, "gold": False, "marts": False}
-    with connect_read_only(path) as connection:
-        rows = connection.execute(
-            """
-            select table_schema, table_name
-            from information_schema.tables
-            """
-        ).fetchall()
+        return absent
+    try:
+        with connect_read_only(path) as connection:
+            rows = connection.execute(
+                """
+                select table_schema, table_name
+                from information_schema.tables
+                """
+            ).fetchall()
+    except WarehouseBusyError as error:
+        logger.info("%s", error)
+        return {**absent, "busy": True}
     relations = {f"{schema}.{table}" for schema, table in rows}
     return {
         "warehouse": True,
         "bronze": BRONZE_RELATION in relations,
         "gold": DIM_CONNECTION in relations,
         "marts": MART_NETWORK_STATS in relations,
+        "busy": False,
     }
 
 
