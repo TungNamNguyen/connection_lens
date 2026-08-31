@@ -15,11 +15,13 @@ import pytest
 
 from streamlit_app.scoring import (
     DEFAULT_WEIGHTS,
+    SIGNAL_LABELS,
     ReferralWeights,
     has_seniority_signal,
     months_since,
     score_connections,
     score_referral,
+    signal_frequency,
 )
 
 TODAY = date(2026, 8, 27)
@@ -173,3 +175,51 @@ def test_score_connections_handles_an_empty_frame() -> None:
     scored = score_connections(empty)
     assert scored.empty
     assert "score" in scored.columns
+
+
+# --- signal frequency ------------------------------------------------------
+def test_signal_frequency_counts_connections_not_points() -> None:
+    """Each signal is counted once per connection it fired for.
+
+    The distinction is the whole point: summing `components` instead of
+    counting its keys would report a recruiter's 40 points as 40 people.
+    """
+    frame = pd.DataFrame(
+        {
+            "company": ["Acme Bank", "Globex"],
+            "position": ["Technical Recruiter", "Junior Designer"],
+            "connected_on": [RECENT, OLD],
+            "email_address": [None, None],
+        }
+    )
+    counts = dict(
+        zip(
+            signal_frequency(frame, today=TODAY)["signal"],
+            signal_frequency(frame, today=TODAY)["connections"],
+            strict=True,
+        )
+    )
+    assert counts["Strongest role tag"] == 1
+    assert counts["Connected recently"] == 1
+    assert counts["Early career (penalty)"] == 1
+    # Nobody in this frame has an email, and the row must still be reported.
+    assert counts["Email in the export"] == 0
+
+
+def test_signal_frequency_reports_every_signal_even_at_zero() -> None:
+    frame = pd.DataFrame(
+        {
+            "company": ["Acme Bank"],
+            "position": ["Technical Recruiter"],
+            "connected_on": [RECENT],
+            "email_address": [None],
+        }
+    )
+    assert list(signal_frequency(frame, today=TODAY)["signal"]) == list(
+        SIGNAL_LABELS.values()
+    )
+
+
+def test_signal_frequency_handles_an_empty_frame() -> None:
+    empty = pd.DataFrame(columns=["company", "position", "connected_on", "email_address"])
+    assert signal_frequency(empty).empty
