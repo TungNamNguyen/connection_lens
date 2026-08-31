@@ -26,14 +26,18 @@ from streamlit_app.scoring import (  # noqa: E402
     DEFAULT_WEIGHTS,
     has_seniority_signal,
     score_connections,
+    signal_frequency,
 )
 from streamlit_app.tagging import (  # noqa: E402
     ALL_JOB_FAMILIES,
     ALL_TAGS,
     EARLY_CAREER,
+    ENGINEERING,
     JOB_FAMILY_RULES,
+    RECRUITER_TALENT,
     TAG_DESCRIPTIONS,
     TAG_KEYWORDS,
+    TARGET_PEER,
     job_family,
     tag_connection,
 )
@@ -56,6 +60,16 @@ SCORE_BANDS: list[tuple[str, int, int]] = [
 
 #: A company is a "stronghold" once this many connections work there.
 STRONGHOLD_MINIMUM = 3
+
+#: How many employers the concentration metric adds up.
+CONCENTRATION_TOP_N = 10
+
+#: Job families listed in the depth table. Past ten the tail is single figures.
+DEPTH_FAMILY_LIMIT = 10
+
+#: Tags that count as "in your field" for the stronghold table: someone on the
+#: same career track, or a technical person who can refer inside their own team.
+IN_FIELD_TAGS = frozenset({TARGET_PEER, ENGINEERING})
 
 #: Every chart in a side-by-side row shares a height, so the two panels line up.
 PANEL_CHART_HEIGHT = 260
@@ -113,7 +127,11 @@ has_history = len(stats) > 1
 connections = db.load_current_connections()
 monthly = db.load_connected_over_time()
 if not monthly.empty:
-    monthly = monthly.assign(year_month=pd.to_datetime(monthly["year_month"]))
+    # The mart emits "YYYY-MM"; naming the format keeps pandas off its
+    # per-element dateutil fallback, which is both slow and free to guess.
+    monthly = monthly.assign(
+        year_month=pd.to_datetime(monthly["year_month"], format="%Y-%m")
+    )
 
 
 def chart_panel(title: str, caption: str | None = None, *, height: int | None = None):
@@ -167,8 +185,7 @@ headline[4].metric(
     icon=":material/mail:",
     border=True,
     height=METRIC_HEIGHT,
-    help="LinkedIn only exports an address when the connection opted in, so "
-    "most rows are legitimately blank.",
+    help="LinkedIn only exports an address when the connection opted in.",
 )
 st.caption(
     f"As of snapshot {format_timestamp(latest['snapshot_ts'])} · "
@@ -199,8 +216,7 @@ with growth_tab:
             )
         with churn_column, chart_panel(
             "Joined vs left, per snapshot",
-            "“Left” means the connection was absent from that export. No "
-            "reason is inferred — LinkedIn's export gives none.",
+            "“Left” means absent from that export.",
             height=PANEL_HEIGHT,
         ):
             st.altair_chart(
@@ -212,8 +228,7 @@ with growth_tab:
     build_column, cumulative_column = st.columns(2, gap="medium")
     with build_column, chart_panel(
         "When the network was built",
-        "Counted from each connection's own date, so this works from the very "
-        "first export — unlike the growth chart, which compares snapshots.",
+        "By each connection's own date.",
         height=PANEL_HEIGHT,
     ):
         if monthly.empty:
@@ -246,6 +261,42 @@ with growth_tab:
 
 # --- Composition -----------------------------------------------------------
 with composition_tab:
+    if not connections.empty:
+        # Employers are counted by `company_key`, not by raw text, so two
+        # spellings of one employer stay one employer — the same key the
+        # Companies metric above uses.
+        employers = connections.loc[connections["company"].notna(), "company_key"]
+        employer_sizes = employers.value_counts()
+        top_n_share = (
+            100 * employer_sizes.head(CONCENTRATION_TOP_N).sum() / len(connections)
+        )
+        concentration = st.columns(3, gap="medium")
+        concentration[0].metric(
+            "Employers",
+            f"{employer_sizes.size:,}",
+            icon=":material/apartment:",
+            border=True,
+            height=METRIC_HEIGHT,
+        )
+        concentration[1].metric(
+            f"Top {CONCENTRATION_TOP_N} employers' share",
+            f"{top_n_share:.0f}%",
+            icon=":material/donut_large:",
+            border=True,
+            height=METRIC_HEIGHT,
+            help="Share of the whole network working at one of them — a low "
+            "number means the network is spread thin across many employers.",
+        )
+        concentration[2].metric(
+            f"Employers with {STRONGHOLD_MINIMUM}+",
+            f"{int((employer_sizes >= STRONGHOLD_MINIMUM).sum()):,}",
+            icon=":material/groups:",
+            border=True,
+            height=METRIC_HEIGHT,
+            help="Where you know enough people to cross-check an introduction.",
+        )
+        st.markdown("")
+
     def breakdown_panel(
         title: str,
         dimension_type: str,
@@ -322,10 +373,7 @@ with composition_tab:
     with st.container(border=True):
         section(
             "Job families",
-            "Job titles are free text, so the Top-job-titles chart above ranks "
-            "*strings*, and there are nearly as many of those as there are "
-            "people. This groups them into one family each by keyword, which "
-            "is what makes “how many data engineers do I know?” answerable.",
+            "Free-text job titles grouped into one family each.",
         )
         if connections.empty:
             st.caption("No current connections yet.")
@@ -365,15 +413,12 @@ with composition_tab:
                 )
             st.caption(
                 f"Showing {len(family_frame)} of {len(ALL_JOB_FAMILIES)} families · "
-                "every connection lands in exactly one, so the bars sum to the "
-                f"network ({len(connections):,})."
+                f"one family per connection, so the bars sum to {len(connections):,}."
             )
 
     with chart_panel(
         "Role mix",
-        "Tags come from `streamlit_app/tagging.py`, the same function the Job "
-        "Search tab uses — the taxonomy is never duplicated in SQL. A "
-        "connection can carry several tags.",
+        "A connection can carry several tags.",
     ):
         if connections.empty:
             st.caption("No current connections yet.")
@@ -437,9 +482,6 @@ list runs most-specific first so "Senior Analytics Engineer" reaches
 `Analytics Engineering` before `Data Analytics` or `Software Engineering` can
 claim it, and "Network Engineer" reaches `IT & Security` before
 `Software Engineering`.
-
-Both live in `streamlit_app/tagging.py` as pure functions with their own
-pytest suite — never duplicated in SQL, which is what would let them drift.
             """
         )
 
@@ -493,56 +535,65 @@ pytest suite — never duplicated in SQL, which is what would let them drift.
             "“Team Lead”."
         )
 
-    if not connections.empty:
-        section("Career stage and reachability")
-        stage_columns = st.columns(4, gap="medium")
-        senior_count = int(connections["position"].map(has_seniority_signal).sum())
-        early_count = int(
-            connections["position"]
-            .map(lambda value: EARLY_CAREER in tag_connection(value))
-            .sum()
-        )
-        with_email = int(connections["email_address"].notna().sum())
-        no_company = int(connections["company"].isna().sum())
-        stage_columns[0].metric(
-            "Senior titles",
-            f"{senior_count:,}",
-            f"{100 * senior_count / len(connections):.0f}%",
-            delta_arrow="off",
-            border=True,
-            height=METRIC_HEIGHT,
-        )
-        stage_columns[1].metric(
-            "Early career",
-            f"{early_count:,}",
-            f"{100 * early_count / len(connections):.0f}%",
-            delta_arrow="off",
-            border=True,
-            height=METRIC_HEIGHT,
-        )
-        stage_columns[2].metric(
-            "Reachable by email",
-            f"{with_email:,}",
-            f"{100 * with_email / len(connections):.0f}%",
-            delta_arrow="off",
-            border=True,
-            height=METRIC_HEIGHT,
-        )
-        stage_columns[3].metric(
-            "No employer listed",
-            f"{no_company:,}",
-            f"{100 * no_company / len(connections):.0f}%",
-            delta_arrow="off",
-            border=True,
-            height=METRIC_HEIGHT,
-        )
 
 # --- Referral reach --------------------------------------------------------
+def render_career_stage() -> None:
+    """Career stage and reachability of the current network.
+
+    Lives on the Referral reach tab rather than with the other distributions:
+    seniority and an email address are not facts about *who* is in the network,
+    they are the two things that decide whether it can act for you.
+    """
+    if connections.empty:
+        return
+    section("Career stage and reachability")
+    stage_columns = st.columns(4, gap="medium")
+    senior_count = int(connections["position"].map(has_seniority_signal).sum())
+    early_count = int(
+        connections["position"]
+        .map(lambda value: EARLY_CAREER in tag_connection(value))
+        .sum()
+    )
+    with_email = int(connections["email_address"].notna().sum())
+    no_company = int(connections["company"].isna().sum())
+    stage_columns[0].metric(
+        "Senior titles",
+        f"{senior_count:,}",
+        f"{100 * senior_count / len(connections):.0f}%",
+        delta_arrow="off",
+        border=True,
+        height=METRIC_HEIGHT,
+    )
+    stage_columns[1].metric(
+        "Early career",
+        f"{early_count:,}",
+        f"{100 * early_count / len(connections):.0f}%",
+        delta_arrow="off",
+        border=True,
+        height=METRIC_HEIGHT,
+    )
+    stage_columns[2].metric(
+        "Reachable by email",
+        f"{with_email:,}",
+        f"{100 * with_email / len(connections):.0f}%",
+        delta_arrow="off",
+        border=True,
+        height=METRIC_HEIGHT,
+    )
+    stage_columns[3].metric(
+        "No employer listed",
+        f"{no_company:,}",
+        f"{100 * no_company / len(connections):.0f}%",
+        delta_arrow="off",
+        border=True,
+        height=METRIC_HEIGHT,
+    )
+
 with reach_tab:
     section(
         "Referral reach",
-        "The same score the Job Search tab ranks by: how strongly each "
-        "connection could refer you into the company they work at today.",
+        "How strongly each connection could refer you into the company they "
+        "work at today.",
     )
 
     if connections.empty:
@@ -591,10 +642,7 @@ with reach_tab:
         band_column, stronghold_column = st.columns(2, gap="medium")
         with band_column, chart_panel(
             "Referral strength distribution",
-            f"Maximum possible score is {DEFAULT_WEIGHTS.maximum}. Scoring 0 "
-            "usually means an untagged title and an old connection, not that "
-            "the person is useless — only a missing employer rules a referral "
-            "out.",
+            f"Out of a possible {DEFAULT_WEIGHTS.maximum}.",
             height=PANEL_HEIGHT,
         ):
             st.altair_chart(
@@ -613,21 +661,35 @@ with reach_tab:
 
         with stronghold_column, chart_panel(
             "Strongholds",
-            f"Companies where {STRONGHOLD_MINIMUM}+ of your connections work — "
-            "deep enough that one introduction can be cross-checked with "
-            "someone else.",
+            f"Companies with {STRONGHOLD_MINIMUM}+ of your connections, deepest "
+            "in your field first.",
             height=PANEL_HEIGHT,
         ):
+            # Depth alone is the wrong ranking: eight connections who are all
+            # designers do less for a data role than three analytics engineers.
+            # Crossing company against field is what neither the company chart
+            # nor the job-family chart can show on its own.
+            tagged = scored.assign(
+                in_field=scored["position"].map(
+                    lambda value: bool(IN_FIELD_TAGS & set(tag_connection(value)))
+                ),
+                is_recruiter=scored["position"].map(
+                    lambda value: RECRUITER_TALENT in tag_connection(value)
+                ),
+            )
             strongholds = (
-                scored[scored["company"].notna()]
+                tagged[tagged["company"].notna()]
                 .groupby("company")
                 .agg(
                     connections=("connection_id", "count"),
+                    in_field=("in_field", "sum"),
+                    recruiters=("is_recruiter", "sum"),
                     best_score=("score", "max"),
-                    median_score=("score", "median"),
                 )
                 .query(f"connections >= {STRONGHOLD_MINIMUM}")
-                .sort_values(["best_score", "connections"], ascending=False)
+                .sort_values(
+                    ["in_field", "best_score", "connections"], ascending=False
+                )
                 .head(12)
                 .reset_index()
             )
@@ -641,14 +703,21 @@ with reach_tab:
                     pd.DataFrame(
                         {
                             "Company": strongholds["company"],
-                            "Connections": strongholds["connections"],
+                            "People": strongholds["connections"],
+                            "In field": strongholds["in_field"].astype(int),
+                            "Recruiters": strongholds["recruiters"].astype(int),
                             "Best score": strongholds["best_score"],
-                            "Median": strongholds["median_score"].astype(int),
                         }
                     ),
                     width="stretch",
                     hide_index=True,
                     column_config={
+                        "In field": st.column_config.NumberColumn(
+                            "In field",
+                            help="Tagged as a peer in your field or as an "
+                            "engineer — someone who can refer inside their "
+                            "own team.",
+                        ),
                         "Best score": st.column_config.ProgressColumn(
                             "Best score",
                             min_value=0,
@@ -658,13 +727,76 @@ with reach_tab:
                     },
                 )
 
+        depth_column, signal_column = st.columns(2, gap="medium")
+
+        with depth_column, chart_panel(
+            "Depth by job family",
+            "Knowing many people in a field is not the same as knowing senior "
+            "ones.",
+            height=PANEL_HEIGHT,
+        ):
+            families = pd.DataFrame(
+                {
+                    "family": connections["position"].map(job_family),
+                    "senior": connections["position"].map(has_seniority_signal),
+                }
+            )
+            depth = (
+                families.groupby("family")
+                .agg(connections=("senior", "size"), senior=("senior", "sum"))
+                .sort_values("connections", ascending=False)
+                .head(DEPTH_FAMILY_LIMIT)
+                .reset_index()
+            )
+            depth["senior_share"] = 100 * depth["senior"] / depth["connections"]
+            st.dataframe(
+                pd.DataFrame(
+                    {
+                        "Family": depth["family"],
+                        "People": depth["connections"],
+                        "Senior": depth["senior"].astype(int),
+                        "Senior share": depth["senior_share"],
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Senior share": st.column_config.ProgressColumn(
+                        "Senior share",
+                        min_value=0,
+                        max_value=100,
+                        format="%.0f%%",
+                    ),
+                },
+            )
+
+        with signal_column, chart_panel(
+            "What drives the score",
+            "How many connections each signal fires for.",
+            height=PANEL_HEIGHT,
+        ):
+            st.altair_chart(
+                charts.ranked_bar_chart(
+                    signal_frequency(connections),
+                    palette,
+                    label_column="signal",
+                    value_column="connections",
+                    label_title="Signal",
+                    value_title="Connections",
+                    height=PANEL_CHART_HEIGHT,
+                ),
+                use_container_width=True,
+                theme=None,
+            )
+
+        render_career_stage()
+
 # --- Data quality ----------------------------------------------------------
 with quality_tab:
     section(
         "Data quality of the latest snapshot",
         "Restricted profiles export as a date-only row with no profile URL, so "
-        "they cannot be given a stable identity and are excluded from the Gold "
-        "layer — counted here rather than dropped silently.",
+        "they are counted here rather than modelled.",
     )
     quality_columns = st.columns(3, gap="medium")
     quality_columns[0].metric(
@@ -681,9 +813,7 @@ with quality_tab:
         border=True,
         height=METRIC_HEIGHT,
         help="Counted over every row in the export, restricted profiles "
-        "included — so it is larger than the `(unknown)` bucket on the "
-        "Composition tab, which can only count rows that reached the Gold "
-        "layer.",
+        "included.",
     )
     quality_columns[2].metric(
         "No job title disclosed",
@@ -692,7 +822,7 @@ with quality_tab:
         border=True,
         height=METRIC_HEIGHT,
         help="Counted over every row in the export, restricted profiles "
-        "included — see the note on the metric to its left.",
+        "included.",
     )
 
     st.markdown("")
