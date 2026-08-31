@@ -18,6 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 from common.settings import get_settings  # noqa: E402
@@ -26,6 +27,7 @@ from streamlit_app.auth import require_login  # noqa: E402
 from streamlit_app.theme import page_header, section, status_pill  # noqa: E402
 from streamlit_app.ui import (  # noqa: E402
     APP_TITLE,
+    BUSY_NOTICE,
     configure_page,
     format_timestamp,
     minio_status,
@@ -36,13 +38,18 @@ from streamlit_app.ui import (  # noqa: E402
 #: not stand taller than its neighbours.
 METRIC_HEIGHT = 128
 
+#: …and so do the navigation cards. Their blurbs are written to one line at the
+#: usual column width; the fixed height keeps the row's bottom edge straight
+#: anyway once the window narrows enough for one of them to wrap.
+NAV_CARD_HEIGHT = 100
+
 configure_page("Overview")
 require_login()
 
 page_header(
     APP_TITLE,
     "A LinkedIn connections export, turned into network analytics and "
-    "warm-intro signal — locally, with a real ingestion pipeline behind it.",
+    "warm-intro signal.",
 )
 
 settings = get_settings()
@@ -53,7 +60,10 @@ warehouse_card, landing_card, orchestration_card = st.columns(3, gap="medium")
 
 with warehouse_card, st.container(border=True):
     st.markdown("**Warehouse**")
-    if status["warehouse"]:
+    if status["busy"]:
+        st.markdown(status_pill("Ingestion running", "warn"), unsafe_allow_html=True)
+        st.caption("Locked by the DAG while it writes.")
+    elif status["warehouse"]:
         layers = [
             ("Bronze", status["bronze"]),
             ("Gold", status["gold"]),
@@ -88,9 +98,14 @@ with orchestration_card, st.container(border=True):
     st.caption(f"{settings.airflow_public_url} — status on Job Management")
 
 # --- Headline numbers ------------------------------------------------------
-stats = db.load_network_stats()
+# A locked warehouse also returns an empty frame, so the busy case is answered
+# first: telling someone mid-run that they have never ingested anything would
+# be worse than saying nothing.
+stats = pd.DataFrame() if status["busy"] else db.load_network_stats()
 
-if stats.empty:
+if status["busy"]:
+    st.info(BUSY_NOTICE, icon="⏳")
+elif stats.empty:
     st.info(
         "**No snapshots ingested yet.** Start on the **Upload** tab: drop your "
         "LinkedIn `Connections.csv` there, then trigger the ingestion DAG from "
@@ -133,8 +148,7 @@ else:
         icon=":material/person_remove:",
         border=True,
         height=METRIC_HEIGHT,
-        help="Absent from the latest export. No reason is inferred — "
-        "LinkedIn's export gives none.",
+        help="Absent from the latest export.",
     )
 
     st.caption(
@@ -152,16 +166,16 @@ section("Where to go next")
 nav_columns = st.columns(4, gap="medium")
 destinations = [
     ("pages/1_Upload.py", "Upload an export", ":material/upload:",
-     "Validate, hash and land a new `Connections.csv`."),
+     "Validate, hash and land a new export."),
     ("pages/2_Network_Stats.py", "Network stats", ":material/monitoring:",
-     "Growth, churn, composition and referral reach."),
+     "Growth, churn and network composition."),
     ("pages/3_Job_Search.py", "Job search", ":material/target:",
      "Rank who could realistically refer you."),
     ("pages/4_Job_Management.py", "Job management", ":material/settings:",
      "Trigger the DAG and read its logs."),
 ]
 for column, (path, label, icon, blurb) in zip(nav_columns, destinations, strict=True):
-    with column, st.container(border=True):
+    with column, st.container(border=True, height=NAV_CARD_HEIGHT):
         st.page_link(path, label=f"**{label}**", icon=icon)
         st.caption(blurb)
 
