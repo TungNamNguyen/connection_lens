@@ -35,3 +35,13 @@ class LandingZoneError(ConnectionLensError):
 
 class WarehouseNotReadyError(ConnectionLensError):
     """The DuckDB warehouse file does not exist yet (no ingestion has run)."""
+
+
+class WarehouseBusyError(ConnectionLensError):
+    """The warehouse is locked by its single writer — a DAG run is in progress.
+
+    DuckDB allows *either* one read-write process *or* several read-only ones,
+    never both at once (§10), so every read from Streamlit fails for as long as
+    an ingestion run holds the file. That is a transient, expected state rather
+    than a fault: callers must say so and let the reader retry, never crash.
+    """
