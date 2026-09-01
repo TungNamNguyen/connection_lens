@@ -253,8 +253,14 @@ def load_current_connections() -> pd.DataFrame:
     """Every current connection, for the Job Search ranking (§9).
 
     `is_current` is derived the way dbt snapshots express it: an open row has
-    no `dbt_valid_to`. Recency of change is deliberately absent — it is shown
-    in its own panel, not folded into the referral ranking.
+    no `dbt_valid_to`.
+
+    `dbt_valid_from` — when this version of the person first appeared — comes
+    back too, alongside `has_previous_version`. The referral score needs both
+    to claim "changed job recently": after the first ingestion every row is
+    new, so the timestamp alone would announce a job change for the entire
+    network. Someone has only really moved if an older, closed version of them
+    exists.
     """
     return safe_query(
         f"""
@@ -270,10 +276,17 @@ def load_current_connections() -> pd.DataFrame:
             company_dim.current_connection_count as company_connection_count,
             dim.position,
             dim.connected_on,
+            dim.dbt_valid_from,
+            coalesce(versions.version_count, 1) > 1 as has_previous_version,
             dim.dbt_valid_to is null as is_current
         from {DIM_CONNECTION} as dim
         left join {DIM_COMPANY} as company_dim
             on dim.company_key = company_dim.company_key
+        left join (
+            select connection_id, count(*) as version_count
+            from {DIM_CONNECTION}
+            group by connection_id
+        ) as versions on dim.connection_id = versions.connection_id
         where dim.dbt_valid_to is null
         order by dim.full_name
         """
