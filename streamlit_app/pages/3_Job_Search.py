@@ -20,8 +20,17 @@ import streamlit as st  # noqa: E402
 
 from streamlit_app import db  # noqa: E402
 from streamlit_app.auth import require_login  # noqa: E402
-from streamlit_app.scoring import DEFAULT_WEIGHTS, score_connections  # noqa: E402
-from streamlit_app.tagging import ALL_TAGS, format_tags, tag_connection  # noqa: E402
+from streamlit_app.scoring import (  # noqa: E402
+    DEFAULT_WEIGHTS,
+    company_data_teams,
+    score_connections,
+)
+from streamlit_app.tagging import (  # noqa: E402
+    ALL_TAGS,
+    format_tags,
+    job_family,
+    tag_connection,
+)
 from streamlit_app.theme import page_header, section  # noqa: E402
 from streamlit_app.ui import (  # noqa: E402
     configure_page,
@@ -39,8 +48,10 @@ SORT_NAME = "Name (A → Z)"
 SORT_COMPANY = "Company (A → Z)"
 
 #: Above this, a connection is worth putting on a shortlist rather than
-#: scrolling past. Half the scale, i.e. a strong role plus one other signal.
-STRONG_SCORE_THRESHOLD = 50
+#: scrolling past: it is the base score of a peer in one of the families you
+#: apply for, so anyone at or above it has a real route in, not just a warm
+#: acquaintance somewhere adjacent.
+STRONG_SCORE_THRESHOLD = DEFAULT_WEIGHTS.field_peer
 
 #: Metric cards in a row share a fixed height (see the Network Stats tab).
 METRIC_HEIGHT = 120
@@ -67,8 +78,14 @@ if connections.empty:
     st.info("No current connections in the warehouse yet.", icon="⏳")
     st.stop()
 
+# The in-house/agency split is a fact about the whole network, so it is
+# computed before any filter narrows the frame — otherwise typing a company
+# name would change what "in-house" means.
+data_team_keys = company_data_teams(connections)
 connections = connections.assign(
     tags=connections["position"].map(tag_connection),
+    family=connections["position"].map(job_family),
+    company_has_data_team=connections["company_key"].isin(data_team_keys),
     profile_url=connections["connection_id"].map(display_profile_url),
 )
 
@@ -159,8 +176,14 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
 scored = score_connections(filtered)
 
 if sort_choice == SORT_SCORE:
+    # Scores are whole numbers, so people genuinely tie. Breaking the tie by
+    # name would sort a shortlist alphabetically — the second key is the same
+    # signal the score already rewards, at full precision: whoever you
+    # connected with most recently comes first.
     scored = scored.sort_values(
-        ["score", "full_name"], ascending=[False, True], na_position="last"
+        ["score", "connected_on", "full_name"],
+        ascending=[False, False, True],
+        na_position="last",
     )
 elif sort_choice == SORT_COMPANY:
     scored = scored.sort_values("company", ascending=True, na_position="last")
@@ -345,28 +368,40 @@ with st.expander("How referral strength is scored", icon=":material/calculate:")
     st.markdown(
         f"""
 The score answers one question: **how strongly could this person refer you
-into the company they work at today?** Nothing to configure — it reads the
-employer already in the export.
+into a role you actually apply for, at the company they work at today?**
+Nothing to configure — it reads the employer already in the export.
 
-| Signal | Points |
+Everyone has exactly **one way in**; the most direct one that fits wins.
+
+| Their way in | Base |
 | --- | --- |
-| Recruiter / talent | +{DEFAULT_WEIGHTS.role_recruiter} |
-| Executive | +{DEFAULT_WEIGHTS.role_executive} |
-| Leadership | +{DEFAULT_WEIGHTS.role_leadership} |
-| Peer in your field | +{DEFAULT_WEIGHTS.role_peer} |
-| Engineering | +{DEFAULT_WEIGHTS.role_engineering} |
-| A second role tag | +{DEFAULT_WEIGHTS.additional_role_tag} |
-| Seniority in the title | +{DEFAULT_WEIGHTS.seniority} |
-| Connected within {DEFAULT_WEIGHTS.recent_connection_months} months | +{DEFAULT_WEIGHTS.recent_connection} |
-| Email in the export | +{DEFAULT_WEIGHTS.reachable_by_email} |
+| Leads a team in one of your families — they can create the role | +{DEFAULT_WEIGHTS.field_leader} |
+| Works in one of your families — hears about openings first | +{DEFAULT_WEIGHTS.field_peer} |
+| In-house recruiter where there **is** a data team | +{DEFAULT_WEIGHTS.inhouse_recruiter} |
+| Leads an adjacent team | +{DEFAULT_WEIGHTS.adjacent_leader} |
+| Works in an adjacent field | +{DEFAULT_WEIGHTS.adjacent_peer} |
+| Recruiter, but nobody there does this work | +{DEFAULT_WEIGHTS.outside_recruiter} |
+| Senior, but outside your field | +{DEFAULT_WEIGHTS.outside_leader} |
+| No route in | 0 |
+
+Then, and only if there is a way in at all:
+
+| Adjustment | Points |
+| --- | --- |
+| Seniority in the title (not for leaders — their base already prices it in) | +{DEFAULT_WEIGHTS.seniority} |
+| Connected recently, fading smoothly (half-life ≈17 months) | up to +{DEFAULT_WEIGHTS.warmth} |
+| Changed job in the last {DEFAULT_WEIGHTS.recent_move_months} months | +{DEFAULT_WEIGHTS.recent_move} |
 | Early in their career | −{DEFAULT_WEIGHTS.early_career_penalty} |
 
-Only the strongest role tag scores; a second one adds a little rather than
-doubling. Someone with **no employer in the export scores 0** — there is
-nowhere for them to refer you. Maximum **{DEFAULT_WEIGHTS.maximum}**.
+Maximum **{DEFAULT_WEIGHTS.maximum}**. Someone with **no employer** in the
+export scores 0 — there is nowhere for them to refer you — and so does someone
+with **no route in**: how recently you connected modifies a referral, it cannot
+invent one.
 
-**Not scored: how recently they changed job.** Recent moves are shown in their
-own panel above instead. The **Why** column shows which signals fired.
+**Not scored:** an email address (that is their privacy setting, not their
+willingness to help — use it as a filter), and how many people you know at
+their employer (that is the **Companies** tab, and counting it twice here would
+just rank big employers).
         """
     )
 
