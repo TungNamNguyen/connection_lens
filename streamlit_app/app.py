@@ -163,7 +163,7 @@ st.divider()
 # --- Where to go next ------------------------------------------------------
 section("Where to go next")
 
-nav_columns = st.columns(4, gap="medium")
+nav_columns = st.columns(5, gap="medium")
 destinations = [
     ("pages/1_Upload.py", "Upload an export", ":material/upload:",
      "Validate, hash and land a new export."),
@@ -171,7 +171,9 @@ destinations = [
      "Growth, churn and network composition."),
     ("pages/3_Job_Search.py", "Job search", ":material/target:",
      "Rank who could realistically refer you."),
-    ("pages/4_Job_Management.py", "Job management", ":material/settings:",
+    ("pages/4_Companies.py", "Companies", ":material/apartment:",
+     "Where your network reaches, and where it does not."),
+    ("pages/5_Job_Management.py", "Job management", ":material/settings:",
      "Trigger the DAG and read its logs."),
 ]
 for column, (path, label, icon, blurb) in zip(nav_columns, destinations, strict=True):
