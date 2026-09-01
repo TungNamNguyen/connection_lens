@@ -34,8 +34,9 @@ require_login()
 
 page_header(
     "Upload a LinkedIn export",
-    "Get your file from LinkedIn → Settings → **Get a copy of your data** → "
-    "*Connections*. Nothing here is scraped, and nothing leaves this machine.",
+    # page_header escapes its arguments, so this is plain text on purpose.
+    "Get your file from LinkedIn → Settings → Get a copy of your data → "
+    "Connections. Nothing here is scraped, and nothing leaves this machine.",
 )
 
 landing_zone = minio_status()

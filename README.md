@@ -4,6 +4,11 @@ Turn a LinkedIn **"Connections"** data export into network analytics and
 warm-intro signal, through a real event-driven data pipeline: MinIO landing
 zone → Airflow → DuckDB → dbt (Silver/Gold/marts) → Streamlit.
 
+![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
+![Airflow 3.1](https://img.shields.io/badge/airflow-3.1-017CEE)
+![dbt-duckdb](https://img.shields.io/badge/dbt-duckdb-FF694B)
+![Local only](https://img.shields.io/badge/deployment-local%20only-lightgrey)
+
 > **Privacy first.** This is a private, single-user, **local-only** project. It
 > processes real personal data (names, emails, profile URLs, employers), so no
 > raw export, no warehouse file and no `.env` is ever committed, and nothing is
@@ -20,6 +25,61 @@ zone → Airflow → DuckDB → dbt (Silver/Gold/marts) → Streamlit.
 | **Network analytics** | How the network grew, which companies and titles it concentrates in, how many connections joined or left between exports. |
 | **Warm-intro signal** | Who changed company or title recently, who works at a company you are targeting, and who is a recruiter, a hiring manager or a peer in your field. |
 | **Portfolio artifact** | A testable, monitored, event-driven pipeline: idempotent ingestion, SCD Type 2 history, data-quality gates, and CI that proves the modelling rules still hold. |
+
+---
+
+## The app
+
+> Every screenshot below is the real app, rendered against a **synthetic**
+> warehouse: 152 invented connections across three snapshots.
+
+### Overview — is the pipeline healthy, and how big is the network
+
+Service health for all three moving parts (warehouse, landing zone,
+orchestration), the headline numbers from the latest snapshot, and the way into
+each tab.
+
+![Overview tab: warehouse, landing zone and orchestration status, plus connection, company, joiner and leaver counts](docs/images/01_overview.png)
+
+### Network stats — growth, churn and composition
+
+Growth over time and joiners vs leavers per snapshot, from
+`mart_network_stats`; a departed connection simply has no fact row at that
+snapshot.
+
+![Network stats, Growth tab: network size over time, joined vs left per snapshot, connections by month, cumulative size](docs/images/02_network_stats.png)
+
+The Composition tab breaks the network down by employer, job title, job family
+and role tag — the same tagging function the Job Search tab scores with.
+
+![Network stats, Composition tab: top companies, top job titles, job families and role mix](docs/images/03_network_composition.png)
+
+### Job search — who could realistically refer you
+
+Every current connection, ranked by referral strength, with the reasons behind
+each score, the role tags matched from their title, plus who recently changed
+company or title and who is no longer in the network.
+
+![Job search tab: filters, referral-strength ranking with reasons, recent company and title changes, and connections no longer in the network](docs/images/04_job_search.png)
+
+### Job management — trigger the DAG and read its logs
+
+Airflow health, what is pending in the landing zone, the trigger button
+(trigger mode 3), run history attributed by trigger source, and task logs —
+without opening the Airflow UI.
+
+![Job management tab: Airflow health, pending work, trigger button, run history with trigger sources, and a task log](docs/images/05_job_management.png)
+
+### Upload — validate, hash, land
+
+Validation and hashing happen **before** anything is uploaded. Here the file's
+content hash is already in Bronze, so the tab says plainly that no new dataset
+will be created — and uploads it to MinIO anyway, because the landing zone is
+the audit trail.
+
+![Upload tab: validated row count and header line, MD5 content hash, duplicate-content warning, landing-zone objects and ingested Bronze snapshots](docs/images/06_upload.png)
+
+---
 
 ## Architecture
 
@@ -57,40 +117,141 @@ Streamlit · FastAPI · uv · pytest · sqlfluff · GitHub Actions.
 
 ---
 
-## Quickstart
+## Running it from a fresh clone
 
 ```bash
-# 1. Python environment. Dependencies are locked in uv.lock and installed
-#    into .venv — nothing lands system-wide.
-#    (uv itself: https://docs.astral.sh/uv/getting-started/installation/)
-make venv
-make dbt-deps
-
-# 2. Configuration: creates .env and pins AIRFLOW_UID to your user
-make env
-$EDITOR .env          # set the MinIO, Airflow and app-login credentials
-
-# 3. Start the whole stack (MinIO + Airflow + Streamlit + event listener)
-make up          # == docker compose up -d --build
+git clone https://github.com/TungNamNguyen/connection_lens.git
+cd connection_lens
 ```
+
+**You need:** Docker Engine with the Compose v2 plugin, GNU Make, and
+[uv](https://docs.astral.sh/uv/getting-started/installation/) (which brings its
+own Python 3.12). uv is needed even if you only ever run the stack in Docker —
+see step 1. The first `make up` pulls the Airflow, Postgres and MinIO images,
+so budget a few GB and a few minutes.
+
+### 1. Dependencies
+
+```bash
+make venv        # uv sync --frozen → .venv, nothing lands system-wide
+make dbt-deps    # installs dbt_utils / dbt_expectations into dbt_project/dbt_packages
+```
+
+`make dbt-deps` is **not optional for the Docker path either**:
+`dbt_project/` is bind-mounted into the Airflow containers and
+`dbt_packages/` is git-ignored, so a fresh clone has no dbt packages and the
+DAG's dbt tasks would fail. Nothing else installs them for you.
+
+### 2. Configuration
+
+```bash
+make env         # copies .env.example → .env and pins AIRFLOW_UID to your user
+$EDITOR .env
+```
+
+Compose refuses to start until these carry real values — it fails loudly,
+naming the missing key, rather than booting half-configured:
+
+| Key | Note |
+| --- | --- |
+| `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` | What the MinIO container boots with. Keep `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` identical — that is what the app and the DAG sign in with. |
+| `AIRFLOW_ADMIN_USERNAME` / `AIRFLOW_ADMIN_PASSWORD` | The admin user `airflow-init` creates. Keep `AIRFLOW_API_USERNAME` / `AIRFLOW_API_PASSWORD` identical — that is what Streamlit and the listener authenticate with. |
+| `AIRFLOW_POSTGRES_PASSWORD` | Airflow's own metadata database. |
+| `AIRFLOW_JWT_SECRET` | Signs the API tokens — `openssl rand -base64 32`. |
+| `STREAMLIT_AUTH_USERNAME` / `STREAMLIT_AUTH_PASSWORD` | Your login to the app. Unset means the app refuses to render. |
+
+`AIRFLOW_FERNET_KEY` can stay empty locally; set it if you want Airflow's
+stored connections encrypted
+(`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`).
+
+### 3. Start the stack
+
+```bash
+make up          # creates data/warehouse, then docker compose up -d --build
+make ps          # every service should be running / healthy
+make logs        # tail the scheduler if something looks stuck
+```
+
+What happens on its own: the MinIO bucket is created and versioned by
+`minio-init`, Airflow's database is migrated and its admin user created by
+`airflow-init`, and the DAG registers **unpaused** — so a trigger runs
+immediately. The DuckDB file does **not** exist yet; the first successful DAG
+run creates it at `data/warehouse/warehouse.duckdb`.
 
 | Service | URL | Notes |
 | --- | --- | --- |
 | Streamlit | <http://localhost:8501> | Upload, Network Stats, Job Search, Job Management. Sign in with `STREAMLIT_AUTH_USERNAME` / `STREAMLIT_AUTH_PASSWORD` |
-| Airflow | <http://localhost:8080> | Credentials from `.env` |
-| MinIO console | <http://localhost:9001> | Credentials from `.env` |
+| Airflow | <http://localhost:8080> | `AIRFLOW_ADMIN_USERNAME` / `AIRFLOW_ADMIN_PASSWORD` |
+| MinIO console | <http://localhost:9001> | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |
+| Event listener | <http://localhost:8000/health> | Trigger mode 2 only — MinIO posts bucket events here |
 
-Then, in the app:
+### 4. First ingestion
 
-1. **Upload** — drop your `Connections.csv`. It is validated and hashed before
+1. Open Streamlit and sign in.
+2. **Upload** — drop your `Connections.csv`, from LinkedIn → Settings → *Get a
+   copy of your data* → *Connections*. It is validated and hashed before
    anything is uploaded; the file lands in MinIO. This tab never starts
    ingestion.
-2. **Job Management** — press *Trigger ingestion now*. Watch the run, its
-   trigger source and its logs without leaving the app.
-3. **Network Stats** / **Job Search** — read the results.
+3. **Job Management** — press *Trigger ingestion now*, then watch the run reach
+   `success` and read its logs without leaving the app.
+4. **Network Stats** / **Job Search** — populated as soon as that run finishes.
 
-Prefer running the app outside Docker? `make app` serves it from `.venv`
-against the same warehouse.
+Optional, once per bucket: `make minio-events` wires MinIO bucket
+notifications to the listener, so landing a file triggers ingestion by itself
+(trigger mode 2).
+
+### Working on the code
+
+```bash
+make check       # the full local gate, see "Testing, quality and CI" below
+make app         # Streamlit from .venv against data/warehouse/warehouse.duckdb
+make dbt-build   # dbt against the real warehouse (never while a DAG run is in flight —
+                 # DuckDB has one writer, and the run owns it)
+```
+
+### Stopping and resetting
+
+```bash
+make down                            # stop everything; volumes and data are kept
+docker compose down -v               # ...and delete the MinIO bucket and Airflow database
+rm -rf data/warehouse                # ...and the warehouse itself
+```
+
+Deleting the warehouse is not the same as deleting your exports: whatever is
+still in MinIO gets re-ingested on the next run, because idempotency is decided
+by content hash against Bronze — and an empty Bronze means everything is new
+again.
+
+### Every configuration key
+
+Everything configurable lives in `.env` (never committed) and is read through
+`common/settings.py` — no credential or path is hardcoded anywhere. Copy
+`.env.example`, which documents every key:
+
+| Group | Keys | Used by |
+| --- | --- | --- |
+| MinIO | `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, `MINIO_SECURE`, `MINIO_BUCKET`, `MINIO_RAW_PREFIX`, `MINIO_PUBLIC_URL` | Streamlit upload flow and the DAG's landing-zone scan |
+| DuckDB | `DUCKDB_PATH` | Read-only in Streamlit, read-write in the DAG |
+| Airflow REST | `AIRFLOW_API_BASE_URL`, `AIRFLOW_PUBLIC_URL`, `AIRFLOW_API_USERNAME`, `AIRFLOW_API_PASSWORD`, `AIRFLOW_DAG_ID`, `AIRFLOW_INGESTION_TASK_ID`, `AIRFLOW_API_TIMEOUT_SECONDS` | Job Management tab and the event listener |
+| Event listener | `MINIO_EVENT_LISTENER_TOKEN`, `MINIO_EVENT_LISTENER_PORT` | Trigger mode 2 (optional) |
+| App login | `STREAMLIT_AUTH_USERNAME`, `STREAMLIT_AUTH_PASSWORD` | The gate in front of every tab |
+| dbt + logging | `DBT_PROJECT_DIR`, `DBT_PROFILES_DIR`, `DBT_TARGET`, `LOG_LEVEL` | The DAG's dbt tasks and every module's logger |
+| Containers only | `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`, `AIRFLOW_ADMIN_*`, `AIRFLOW_UID`, `AIRFLOW_FERNET_KEY`, `AIRFLOW_JWT_SECRET`, `AIRFLOW_POSTGRES_PASSWORD` | Read by `docker-compose.yml` when the services boot, not by application code |
+
+### Make targets
+
+| Target | What it does |
+| --- | --- |
+| `make venv` / `make dbt-deps` | Install locked Python dependencies into `.venv`, then the dbt packages |
+| `make env` | Create `.env` from the example and pin `AIRFLOW_UID` |
+| `make up` / `make down` / `make ps` / `make logs` | Run, stop and inspect the Docker stack |
+| `make app` | Run Streamlit from `.venv`, no Docker |
+| `make minio-events` | Wire MinIO bucket notifications to the listener (trigger mode 2) |
+| `make test` / `make lint` / `make format` | pytest; ruff + sqlfluff; auto-fix |
+| `make ci-warehouse` | Build a throwaway warehouse from the synthetic fixtures |
+| `make dag-check` | Parse the DAG under real Airflow and assert its guard rails |
+| `make check` | Every gate CI runs, locally — minus CI's tracked-file privacy guard |
+| `make dbt-build` / `make dbt-docs` | Run dbt against the real warehouse; browse the lineage graph |
 
 ---
 
@@ -108,6 +269,7 @@ connection_lens/
 │   ├── data_quality.py           # the Great Expectations suite + checkpoint
 │   ├── airflow_client.py         # REST wrapper (used by the app AND the listener)
 │   ├── models.py                 # typed objects crossing layer boundaries
+│   ├── errors.py                 # the exception types every layer raises
 │   └── settings.py               # env-driven configuration, no hardcoded secrets
 ├── dags/ingest_connections_dag.py
 ├── dbt_project/
@@ -118,13 +280,20 @@ connection_lens/
 │   └── tests/                    # singular tests (SCD2 integrity, volume, share)
 ├── great_expectations/checkpoints/bronze_to_silver.py
 ├── services/minio_event_listener/main.py
-├── streamlit_app/                # app.py + pages/ + auth.py + scoring.py + tagging.py + db.py
+├── streamlit_app/                # app.py + pages/ + auth.py + db.py
+│                                 # + scoring.py / tagging.py — pure, testable ranking logic
+│                                 # + upload_service.py / ui.py — validate-hash-land, shared chrome
 │                                 # + theme.py / charts.py — one visual system for chrome and charts
 ├── .streamlit/config.toml        # app theme: colours, radii, fonts, heading scale
 ├── scripts/                      # CI fixture builder, SCD2 behaviour assertions
 ├── tests/                        # pytest, synthetic fixtures only
+├── docs/                         # architecture decisions, data-quality rules
+│   └── images/                   # the screenshots above — synthetic data only
 ├── docker/                       # Dockerfiles for Airflow, Streamlit, listener
 ├── docker-compose.yml            # the whole local stack: MinIO, Airflow, app
+├── Makefile                      # every entrypoint below is a target here
+├── .env.example                  # every configurable key, documented
+├── data/warehouse/               # where the DuckDB file lives — git-ignored
 ├── pyproject.toml                # dependencies by group + tool config
 ├── uv.lock                       # the exact versions every environment gets
 ├── requirements.txt              # generated from uv.lock; what the images install
@@ -186,17 +355,18 @@ enough to identify anyone.
 ## Testing, quality and CI
 
 ```bash
-make check        # requirements drift + ruff + sqlfluff + pytest + dbt build
+make check        # requirements drift + ruff + sqlfluff + pytest
+                  # + dbt build on synthetic fixtures + DAG parse
 ```
 
 | Layer | What it checks |
 | --- | --- |
-| **pytest** | Hashing, dynamic header detection, schema validation, object-key parsing, the §14 idempotency scenarios, tagging, scoring, the Airflow REST client (mocked), the event listener, the Great Expectations suite |
-| **dbt tests** | Uniqueness and not-null on every key, referential integrity, accepted values, SCD2 integrity, snapshot volume anomalies, identifiable-row share |
+| **pytest** | Hashing, dynamic header detection, schema validation, object-key parsing, every documented ingestion/idempotency scenario, tagging, scoring, the login gate, the Airflow REST client (mocked), the event listener, the Great Expectations suite, and page smoke tests that prove the app still reads a warehouse read-only |
+| **dbt tests** | Uniqueness and not-null on every key, referential integrity, accepted values, and six singular tests: SCD2 integrity, one Bronze batch per snapshot, fact-to-dimension coverage, company counts agreeing, snapshot volume anomalies, identifiable-row share |
 | **Great Expectations** | Bronze → Silver checkpoint: exact column set, metadata integrity, URL and date-format contracts |
-| **Source freshness** | `dbt source freshness` warns when no new export has landed in 30 days |
+| **Source freshness** | `dbt source freshness`, run by the DAG: warns after 30 days without a new export, errors after 90 |
 | **sqlfluff** | Lints every model through the dbt templater |
-| **CI** | Runs all of the above against a warehouse built from **synthetic fixtures**, parses the DAG under real Airflow, asserts the SCD2 rules still hold, and fails if a real export, warehouse file or `.env` is ever tracked |
+| **CI** | Runs all of the above against a warehouse built from **synthetic fixtures** (with coverage), parses the DAG under real Airflow to assert `max_active_runs=1`, no schedule and no catchup, asserts the SCD2 rules still hold, and fails if a real export, warehouse file, `.env` or MinIO volume is ever tracked |
 
 The CI fixtures are two synthetic exports that differ by a company change, a
 title change, a departure and two joiners — and by the **number of note lines
@@ -208,35 +378,28 @@ design.
 
 ---
 
-## Notes on the implementation
+## Documentation
 
-A few things worth knowing if you read the code:
+| Document | What it covers |
+| --- | --- |
+| [docs/architecture_decisions.md](docs/architecture_decisions.md) | Why each choice was made — DuckDB over a cloud warehouse, hash-based idempotency, SCD2 with `hard_deletes`, the owner-initiated delete exception |
+| [docs/data_quality.md](docs/data_quality.md) | Every rule that came from looking at a real export: restricted profiles, blank emails, diacritics, the schema contract |
 
-* **`common/` exists because two runtimes need the same code.** The MinIO
-  client is used by both the Streamlit upload flow and the Airflow DAG; the
-  Airflow REST client is used by both Streamlit and the event listener.
-  Hoisting them out of `streamlit_app/` keeps a single implementation and
-  keeps both unit-testable.
-* **One lockfile, one generated requirements file.** `uv.lock` pins every
-  version; `make requirements` exports the runtime groups into the committed
-  `requirements.txt` that all three images `pip install`, and CI fails if that
-  file drifts from the lock. Airflow itself is deliberately absent from it —
-  it comes from the base image, and reinstalling it from the lock moves Flask,
-  Werkzeug and the OpenTelemetry stack out from under the providers already
-  installed there. Airflow 3 and dbt do share one interpreter, which Airflow 2
-  could not.
-* **Restricted profiles.** A real export contains rows with *only* a
-  connection date — LinkedIn's representation of a restricted or deactivated
-  profile. They cannot be given a stable identity, so they are flagged in
-  Silver, excluded from Gold, and **counted** in `mart_network_stats` rather
-  than dropped silently. See [docs/data_quality.md](docs/data_quality.md).
-* **Every tab is behind a login.** The app carries real names, employers and
-  profile URLs, so `streamlit_app/auth.py` gates each page — including one
-  opened directly by URL — against a single owner account read from `.env`.
-  With no account configured the app fails closed instead of falling open.
-* **Streamlit can never write to the warehouse.** It opens DuckDB read-only in
-  code *and* mounts the warehouse read-only in Docker. Every write happens
-  inside the DAG, which is what keeps DuckDB's single-writer constraint safe.
+---
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+| --- | --- |
+| The app says *Login is not configured* | `STREAMLIT_AUTH_USERNAME` / `STREAMLIT_AUTH_PASSWORD` are unset. The gate fails closed on purpose — set both in `.env` and restart. |
+| *No snapshots ingested yet* after uploading | Uploading never triggers ingestion. Go to Job Management and press *Trigger ingestion now*. |
+| *Ingestion running* on every tab | The DAG holds DuckDB's single write lock while it runs; the tabs say so instead of guessing. It clears when the run finishes. |
+| A trigger did nothing | Expected when no landing-zone object has a hash missing from Bronze. Tick *Rebuild dbt models even if nothing new landed* to rerun the transforms anyway. |
+| Job Management says *Airflow unreachable* | The Airflow stack is not up (`make up`), or `AIRFLOW_API_*` in `.env` does not match the admin user created by `airflow-init`. |
+| Bucket events never fire | Trigger mode 2 needs `make minio-events` once per bucket, plus a running `minio-event-listener`. |
+| `make check` fails on requirements drift | `pyproject.toml`/`uv.lock` changed without regenerating — run `make requirements`. |
+
+---
 
 ## Open items
 
@@ -247,3 +410,10 @@ A few things worth knowing if you read the code:
   from a source that is not LinkedIn-scraped.
 * Elementary OSS is not wired in; freshness and volume monitoring are currently
   covered by `dbt source freshness` and two singular tests.
+
+---
+
+## License
+
+None granted. This is a personal, private tool published for review rather than
+reuse; there is no `LICENSE` file, so default copyright applies.
