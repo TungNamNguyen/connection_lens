@@ -56,11 +56,26 @@ and role tag — the same tagging function the Job Search tab scores with.
 
 ### Job search — who could realistically refer you
 
-Every current connection, ranked by referral strength, with the reasons behind
-each score, the role tags matched from their title, plus who recently changed
-company or title and who is no longer in the network.
+Every current connection, ranked by **how strongly they could refer you into a
+role you actually apply for**, at the company they work at today. Everyone has
+exactly one way in — they can hire in your field, they work in it, they recruit
+for it, or they are adjacent to it — and the **Why** column always says which.
+Below the ranking: who recently changed company or title, and who is no longer
+in the network.
 
 ![Job search tab: filters, referral-strength ranking with reasons, recent company and title changes, and connections no longer in the network](docs/images/04_job_search.png)
+
+### Companies — where the network reaches, and where it does not
+
+Job hunting picks an employer first and a person second, so this tab ranks
+employers by how many ways into them you have: someone doing your job, someone
+senior enough to open the role, an in-house recruiter. The families you apply
+for are a control, not a constant — change them and the ranking moves with
+them. Employers with **no front door** — no recruiter you know — are called
+out, because a referral there is not a shortcut past the queue, it is the only
+queue.
+
+![Companies tab: target-family selector, employers reachable, front-door counts, ranked employer table and a reach chart](docs/images/05_companies.png)
 
 ### Job management — trigger the DAG and read its logs
 
@@ -68,7 +83,7 @@ Airflow health, what is pending in the landing zone, the trigger button
 (trigger mode 3), run history attributed by trigger source, and task logs —
 without opening the Airflow UI.
 
-![Job management tab: Airflow health, pending work, trigger button, run history with trigger sources, and a task log](docs/images/05_job_management.png)
+![Job management tab: Airflow health, pending work, trigger button, run history with trigger sources, and a task log](docs/images/06_job_management.png)
 
 ### Upload — validate, hash, land
 
@@ -77,7 +92,7 @@ content hash is already in Bronze, so the tab says plainly that no new dataset
 will be created — and uploads it to MinIO anyway, because the landing zone is
 the audit trail.
 
-![Upload tab: validated row count and header line, MD5 content hash, duplicate-content warning, landing-zone objects and ingested Bronze snapshots](docs/images/06_upload.png)
+![Upload tab: validated row count and header line, MD5 content hash, duplicate-content warning, landing-zone objects and ingested Bronze snapshots](docs/images/07_upload.png)
 
 ---
 
@@ -116,6 +131,7 @@ flowchart TD
 
     N --> O[Streamlit: Network Stats]
     M1 & M3 --> P[Streamlit: Job Search + scoring]
+    M1 & M3 --> P2[Streamlit: Companies + reach]
     G -.status & logs via REST.-> R[Streamlit: Job Management]
 ```
 
@@ -187,7 +203,7 @@ run creates it at `data/warehouse/warehouse.duckdb`.
 
 | Service | URL | Notes |
 | --- | --- | --- |
-| Streamlit | <http://localhost:8501> | Upload, Network Stats, Job Search, Job Management. Sign in with `STREAMLIT_AUTH_USERNAME` / `STREAMLIT_AUTH_PASSWORD` |
+| Streamlit | <http://localhost:8501> | Upload, Network Stats, Job Search, Companies, Job Management. Sign in with `STREAMLIT_AUTH_USERNAME` / `STREAMLIT_AUTH_PASSWORD` |
 | Airflow | <http://localhost:8080> | `AIRFLOW_ADMIN_USERNAME` / `AIRFLOW_ADMIN_PASSWORD` |
 | MinIO console | <http://localhost:9001> | `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD` |
 | Event listener | <http://localhost:8000/health> | Trigger mode 2 only — MinIO posts bucket events here |
@@ -201,7 +217,8 @@ run creates it at `data/warehouse/warehouse.duckdb`.
    ingestion.
 3. **Job Management** — press *Trigger ingestion now*, then watch the run reach
    `success` and read its logs without leaving the app.
-4. **Network Stats** / **Job Search** — populated as soon as that run finishes.
+4. **Network Stats** / **Job Search** / **Companies** — populated as soon as
+   that run finishes.
 
 Optional, once per bucket: `make minio-events` wires MinIO bucket
 notifications to the listener, so landing a file triggers ingestion by itself
@@ -288,7 +305,9 @@ connection_lens/
 ├── great_expectations/checkpoints/bronze_to_silver.py
 ├── services/minio_event_listener/main.py
 ├── streamlit_app/                # app.py + pages/ + auth.py + db.py
-│                                 # + scoring.py / tagging.py — pure, testable ranking logic
+│                                 # + tagging.py — job families and role tags, one taxonomy
+│                                 # + scoring.py — per-person referral strength
+│                                 # + companies.py — per-employer referral reach
 │                                 # + upload_service.py / ui.py — validate-hash-land, shared chrome
 │                                 # + theme.py / charts.py — one visual system for chrome and charts
 ├── .streamlit/config.toml        # app theme: colours, radii, fonts, heading scale
@@ -368,7 +387,7 @@ make check        # requirements drift + ruff + sqlfluff + pytest
 
 | Layer | What it checks |
 | --- | --- |
-| **pytest** | Hashing, dynamic header detection, schema validation, object-key parsing, every documented ingestion/idempotency scenario, tagging, scoring, the login gate, the Airflow REST client (mocked), the event listener, the Great Expectations suite, and page smoke tests that prove the app still reads a warehouse read-only |
+| **pytest** | Hashing, dynamic header detection, schema validation, object-key parsing, every documented ingestion/idempotency scenario, tagging, per-person scoring, per-employer reach, the login gate, the Airflow REST client (mocked), the event listener, the Great Expectations suite, and page smoke tests that prove the app still reads a warehouse read-only |
 | **dbt tests** | Uniqueness and not-null on every key, referential integrity, accepted values, and six singular tests: SCD2 integrity, one Bronze batch per snapshot, fact-to-dimension coverage, company counts agreeing, snapshot volume anomalies, identifiable-row share |
 | **Great Expectations** | Bronze → Silver checkpoint: exact column set, metadata integrity, URL and date-format contracts |
 | **Source freshness** | `dbt source freshness`, run by the DAG: warns after 30 days without a new export, errors after 90 |
