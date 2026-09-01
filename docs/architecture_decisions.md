@@ -77,6 +77,11 @@ taxonomy is keyword logic that belongs in one testable function. Duplicating
 the keyword lists in a dbt model would guarantee drift, so the SQL breakdown
 mart deliberately covers only company, raw job title and connection month.
 
+The same argument decides where the **company** table is built: `companies.py`
+aggregates an already-tagged frame in Python rather than repeating the keyword
+lists in SQL. That drift is not hypothetical — it is exactly what
+`assert_company_counts_agree` exists to catch.
+
 ## 8. `common/` holds anything two runtimes share
 
 The MinIO client is used by the Streamlit upload flow *and* the Airflow DAG.
@@ -176,3 +181,42 @@ The trade-off is contained rather than waved away:
 
 Bronze is never touched by this path, so the dataset of record and the
 idempotency rules built on it are unaffected.
+
+## 14. Two scores, and the line between them
+
+The app carries two rankings, and keeping them apart is the whole design:
+
+* **Referral strength** (`scoring.py`) is a property of a *person*: what their
+  role lets them do for the roles you apply for, plus how warm the connection
+  is. One person has exactly one **path** in — they can hire in your field,
+  work in it, recruit for it, are adjacent to it, or have no route at all —
+  and that path sets the base score.
+* **Reach** (`companies.py`) is a property of an *employer*: how many ways in
+  you have, counted as people rather than summed scores.
+
+Three rules follow from that line, each of which was got wrong first:
+
+1. **Relevance before power.** A founder of an unrelated company is not a way
+   into a data role. Weighting seniority independently of field put recruiters
+   and founders at the top of a list meant for BI and data engineering roles.
+2. **No route means no score.** Warmth modifies a referral; it cannot invent
+   one. Someone whose title gives no path stays at zero however recently you
+   connected — otherwise a quarter of the network floats above the people who
+   can actually help.
+3. **Company signal stays out of the person score.** Adding "+points per data
+   person at their employer" is constant within a company, so it never helps
+   choose *whom* to contact there — it only pushes big employers up the list,
+   which is the company table's job. The single exception is binary and about
+   the person: whether a recruiter is in-house somewhere that employs data
+   people, or is recruiting for something else.
+
+A knock-on: the score is a whole number with a stated maximum, so people
+genuinely tie. Any ranking built on it supplies its own second key — the Job
+Search tab breaks ties on connection recency, never alphabetically.
+
+## 15. "Changed job recently" needs proof, not a timestamp
+
+`dbt_valid_from` is set for every row on the first ingestion, so a score that
+read it alone would announce a job change for the entire network. The signal
+requires a *closed older version* of the same person to exist as well. It stays
+dormant — correctly reporting nothing — until exports are spaced over time.
