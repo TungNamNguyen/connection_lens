@@ -50,12 +50,15 @@ from streamlit_app.ui import (  # noqa: E402
 )
 
 #: Score bands for the referral-reach distribution, weakest first.
+#: Bands follow the referral paths rather than round numbers: 0 is "no route
+#: in", the middle bands are adjacent or agency-recruiter territory, and the
+#: top band starts where someone can actually open a role in your field.
 SCORE_BANDS: list[tuple[str, int, int]] = [
-    ("0 — no signal", 0, 0),
-    ("1–24", 1, 24),
-    ("25–49", 25, 49),
-    ("50–74", 50, 74),
-    ("75+", 75, 1_000),
+    ("0 — no route in", 0, 0),
+    ("1–19 — weak", 1, 19),
+    ("20–34 — adjacent", 20, 34),
+    ("35–49 — a real route", 35, 49),
+    ("50+ — can hire you", 50, 1_000),
 ]
 
 #: A company is a "stronghold" once this many connections work there.
