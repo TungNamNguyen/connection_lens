@@ -424,6 +424,7 @@ design.
 | Job Management says *Airflow unreachable* | The Airflow stack is not up (`make up`), or `AIRFLOW_API_*` in `.env` does not match the admin user created by `airflow-init`. |
 | Bucket events never fire | Trigger mode 2 needs `make minio-events` once per bucket, plus a running `minio-event-listener`. |
 | `make check` fails on requirements drift | `pyproject.toml`/`uv.lock` changed without regenerating — run `make requirements`. |
+| A page throws `ImportError: cannot import name …` after you pull | The source is bind-mounted, so the file in the container is already current — but the running Streamlit process still holds the module it imported at start-up, and Streamlit only re-executes the page script, not its imports. `docker compose restart streamlit`. A rebuild is only needed when `requirements.txt` changed. |
 
 ---
 
