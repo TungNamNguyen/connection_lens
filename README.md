@@ -83,6 +83,13 @@ the audit trail.
 
 ## Architecture
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.svg">
+  <img alt="Connection Lens architecture: a LinkedIn export is validated and hashed in Streamlit, landed in MinIO, ingested by an Airflow DAG that can be started three ways, checked by Great Expectations, modelled by dbt in DuckDB across Bronze, Silver and Gold, and served back through the Streamlit tabs" src="docs/images/architecture-light.svg">
+</picture>
+
+The same flow in detail — every layer, model and trigger path:
+
 ```mermaid
 flowchart TD
     A[LinkedIn export CSV] --> B["Streamlit Upload tab<br/>1. validate required columns<br/>2. compute MD5 of the bytes"]
@@ -288,7 +295,7 @@ connection_lens/
 ├── scripts/                      # CI fixture builder, SCD2 behaviour assertions
 ├── tests/                        # pytest, synthetic fixtures only
 ├── docs/                         # architecture decisions, data-quality rules
-│   └── images/                   # the screenshots above — synthetic data only
+│   └── images/                   # architecture diagram + screenshots (synthetic data only)
 ├── docker/                       # Dockerfiles for Airflow, Streamlit, listener
 ├── docker-compose.yml            # the whole local stack: MinIO, Airflow, app
 ├── Makefile                      # every entrypoint below is a target here
