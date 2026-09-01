@@ -44,6 +44,8 @@ TAG_KEYWORDS: Final[dict[str, tuple[str, ...]]] = {
         "recruiter",
         "recruiting",
         "recruitment",
+        "staffing",
+        "headhunter",
         "talent",
         "sourcer",
         "hr",
@@ -189,7 +191,10 @@ JOB_FAMILY_RULES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ),
     (
         "Business Intelligence",
-        ("business intelligence", "bi", "power bi", "tableau", "looker", "qlik"),
+        (
+            "business intelligence", "bi", "power bi", "tableau", "looker",
+            "qlik", "data intelligence",
+        ),
     ),
     ("Business Analysis", ("business analyst", "business analysis", "ba")),
     (
@@ -221,7 +226,8 @@ JOB_FAMILY_RULES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "cyber security", "cybersecurity", "information security",
             "infosec", "security analyst", "security engineer",
             "it support", "information technology support", "help desk",
-            "helpdesk", "system administrator", "sysadmin", "systems engineer",
+            "helpdesk", "service desk",
+            "system administrator", "sysadmin", "systems engineer",
             "network engineer", "technical support",
         ),
     ),
@@ -274,11 +280,46 @@ JOB_FAMILY_RULES: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "managing director", "partner",
         ),
     ),
+    (
+        # Last rule on purpose: every specific analyst — data, business,
+        # security, reporting — has already been claimed above. What is left
+        # ("Pricing Analyst", "Commercial Analyst", plain "Analyst") is
+        # analytical work of some kind, so it belongs in an adjacent family
+        # rather than in `Other`. It is deliberately NOT mapped to a data
+        # family: a Service Desk Analyst is not a peer in your field, and
+        # counting them as one would inflate the company reach table.
+        "Business Analysis",
+        ("analyst",),
+    ),
 )
 
+#: Every family a title can land in, in match order. Deduplicated because a
+#: family may be claimed by more than one rule (a specific rule early, a
+#: catch-all late).
 ALL_JOB_FAMILIES: Final[tuple[str, ...]] = (
-    *(family for family, _ in JOB_FAMILY_RULES),
+    *dict.fromkeys(family for family, _ in JOB_FAMILY_RULES),
     OTHER_FAMILY,
+)
+
+#: The families the owner is applying for. Everything downstream — the
+#: referral score, the company reach table — is measured *relative to these*,
+#: so they live with the taxonomy rather than in any one consumer.
+TARGET_FAMILIES: Final[tuple[str, ...]] = (
+    "Business Intelligence",
+    "Data Analytics",
+    "Data Engineering",
+    "Analytics Engineering",
+)
+
+#: Neighbouring families: they can refer across a team boundary, and their
+#: presence proves the employer has technical people — but they do not own the
+#: roles being applied for.
+ADJACENT_FAMILIES: Final[tuple[str, ...]] = (
+    "Data Science",
+    "AI / Machine Learning",
+    "Business Analysis",
+    "Software Engineering",
+    "Product",
 )
 
 _COMPILED_FAMILY_RULES: Final[tuple[tuple[str, tuple[re.Pattern[str], ...]], ...]] = (
