@@ -25,7 +25,8 @@ PAGES = [
     "streamlit_app/pages/1_Upload.py",
     "streamlit_app/pages/2_Network_Stats.py",
     "streamlit_app/pages/3_Job_Search.py",
-    "streamlit_app/pages/4_Job_Management.py",
+    "streamlit_app/pages/4_Companies.py",
+    "streamlit_app/pages/5_Job_Management.py",
 ]
 
 RUN_TIMEOUT_SECONDS = 30
@@ -175,8 +176,8 @@ def test_airflow_link_points_at_the_browser_url(
     get_settings.cache_clear()
     db.clear_caches()
     try:
-        app = run_page("streamlit_app/pages/4_Job_Management.py")
-        assert_no_exception(app, "4_Job_Management.py")
+        app = run_page("streamlit_app/pages/5_Job_Management.py")
+        assert_no_exception(app, "5_Job_Management.py")
 
         rendered = " ".join(str(item.value) for item in app.markdown)
         assert "http://localhost:8080/dags/ingest_connections" in rendered
